@@ -31,16 +31,16 @@ jobs:
           DATASET='sita2ksitas/h3-input-assets'
           mkdir -p .bridge
           ok=0
-          for attempt in $(seq 1 30); do
-            if kaggle datasets files "$DATASET" --page-size 100 -v -q > .bridge/files.csv 2>.bridge/error.txt; then
-              if grep -Fq 'H3_Inputs/README.txt' .bridge/files.csv && grep -Fq 'H3_Inputs/input_manifest.json' .bridge/files.csv; then
+          for attempt in $(seq 1 18); do
+            if kaggle datasets files "$DATASET" --page-size 100 > .bridge/files.txt 2>.bridge/error.txt; then
+              if grep -Fq 'H3_Inputs/README.txt' .bridge/files.txt && grep -Fq 'H3_Inputs/input_manifest.json' .bridge/files.txt; then
                 ok=1
                 break
               fi
             fi
             sleep 5
           done
-          cat .bridge/files.csv || true
+          cat .bridge/files.txt || true
           if [ "$ok" -ne 1 ]; then
             cat .bridge/error.txt >&2 || true
             exit 1
