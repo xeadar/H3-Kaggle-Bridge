@@ -1,0 +1,7 @@
+{
+  "request_id": "recover-garden-tales-v19-001",
+  "kernel_version": "sita2ksitas/garden-tales-v19/19",
+  "target_dataset": "sita2ksitas/garden-tales-pv",
+  "action": "recover_completed_output_only",
+  "gpu_run": false
+}
