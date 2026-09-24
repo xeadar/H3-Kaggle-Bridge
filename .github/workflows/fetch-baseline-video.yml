@@ -34,18 +34,14 @@ jobs:
           python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
           kaggle --version
 
-      - name: Fetch known baseline MP4 from Kaggle Dataset
-        id: fetch
-        continue-on-error: true
+      - name: Load bridge request
         shell: bash
         run: |
           set -euo pipefail
-
           if [ -z "${KAGGLE_API_TOKEN:-}" ]; then
             echo 'KAGGLE_API_TOKEN is not configured in GitHub Actions Secrets.' >&2
             exit 20
           fi
-
           python - <<'PY'
           import json, os
           req = json.load(open('control/fetch-baseline-video.json', encoding='utf-8'))
@@ -60,6 +56,12 @@ jobs:
               print(f"EXPECTED_BYTES={req.get('expected_bytes', '')}", file=f)
           PY
 
+      - name: Fetch known baseline MP4 from Kaggle Dataset
+        id: fetch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p .bridge/kaggle .bridge/out
 
           # Read-only download. This does not create a Dataset version and does not touch any Notebook/GPU job.
@@ -172,6 +174,7 @@ jobs:
             exit 0
           fi
           git commit -m 'Report Kaggle baseline-video bridge result [skip ci]'
+          git pull --rebase origin main
           git push
 
       - name: Fail workflow when fetch failed
