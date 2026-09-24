@@ -1,9 +1,0 @@
-{
-  "request_id": "bridge-first-frame-001",
-  "source_dataset": "sita2ksitas/h3-first-frame-test",
-  "source_file": "IMG_1787_3(4).jpeg",
-  "target_dataset": "sita2ksitas/h3-kaggle-bridge-inputs",
-  "target_title": "H3 Kaggle Bridge Inputs",
-  "target_file": "first_frame.jpeg",
-  "purpose": "Non-GPU bridge test. Read existing first frame and write it to a separate private Kaggle Dataset without touching the active Garden Tales run."
-}
