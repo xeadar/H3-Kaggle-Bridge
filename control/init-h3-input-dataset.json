@@ -1,0 +1,10 @@
+{
+  "request_id": "init-h3-input-dataset-001",
+  "target_dataset": "sita2ksitas/h3-input-assets",
+  "folder": "H3_Inputs/",
+  "first_frame_source": "0994",
+  "first_frame_target_name": "FIRST_FRAME.jpeg",
+  "last_frame_source": "0993",
+  "last_frame_target_name": "LAST_FRAME.jpeg",
+  "note": "Initialize a dedicated private H3 input Dataset and record frame mapping. Do not upload Chat-compressed frame copies as production inputs."
+}
