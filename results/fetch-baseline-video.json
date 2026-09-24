@@ -1,0 +1,12 @@
+{
+  "state": "failed",
+  "request_id": "bridge-fetch-baseline-video-001",
+  "source_dataset": "sita2ksitas/garden-tales-pv",
+  "output_name": "Garden_Tales_v16_baseline.mp4",
+  "expected_sha256": "d943b8567cc576c67b5f8d26e2e1f7e800f03a4c53ae8f6e5ee1b4df87c9f69b",
+  "expected_bytes": "845964",
+  "artifact_name": null,
+  "github_commit": "28faf4652577137c85f7d46bd7ef7e780f8687af",
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/35990695720",
+  "updated_at": "2026-09-24T11:02:44.000016+00:00"
+}
