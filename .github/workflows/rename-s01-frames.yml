@@ -41,6 +41,11 @@ jobs:
           import hashlib, json
 
           root = Path('.bridge/source')
+          print('0993/0994 candidates:')
+          for p in sorted(root.rglob('*')):
+              if p.is_file() and ('0993' in p.name.lower() or '0994' in p.name.lower()):
+                  print(p.relative_to(root))
+
           mapping = {
               'IMG_0994.HEIC': 'S01_FIRST_FRAME.HEIC',
               'IMG_0993.HEIC': 'S01_LAST_FRAME.HEIC',
@@ -48,9 +53,9 @@ jobs:
           receipt = {'dataset': 'sita2ksitas/h3-input-assets', 'renamed': []}
 
           for old_name, new_name in mapping.items():
-              matches = [p for p in root.rglob('*') if p.is_file() and p.name == old_name]
+              matches = [p for p in root.rglob('*') if p.is_file() and p.name.lower() == old_name.lower()]
               if len(matches) != 1:
-                  raise SystemExit(f'Expected exactly one {old_name}, found {len(matches)}')
+                  raise SystemExit(f'Expected exactly one case-insensitive match for {old_name}, found {len(matches)}')
               src = matches[0]
               dst = src.with_name(new_name)
               if dst.exists():
@@ -93,10 +98,10 @@ jobs:
           ok=0
           for attempt in $(seq 1 30); do
             if kaggle datasets files "$DATASET" --page-size 100 > .bridge/files.txt 2>.bridge/error.txt; then
-              if grep -Fq 'S01_FIRST_FRAME.HEIC' .bridge/files.txt \
-                && grep -Fq 'S01_LAST_FRAME.HEIC' .bridge/files.txt \
-                && ! grep -Fq 'IMG_0994.HEIC' .bridge/files.txt \
-                && ! grep -Fq 'IMG_0993.HEIC' .bridge/files.txt; then
+              if grep -Fiq 'S01_FIRST_FRAME.HEIC' .bridge/files.txt \
+                && grep -Fiq 'S01_LAST_FRAME.HEIC' .bridge/files.txt \
+                && ! grep -Fiq 'IMG_0994.HEIC' .bridge/files.txt \
+                && ! grep -Fiq 'IMG_0993.HEIC' .bridge/files.txt; then
                 ok=1
                 break
               fi
