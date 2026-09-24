@@ -10,8 +10,8 @@ __pycache__/
 .venv/
 venv/
 
-# Vercel local state
-.vercel/
+# Bridge scratch
+.bridge/
 
 # macOS
 .DS_Store
