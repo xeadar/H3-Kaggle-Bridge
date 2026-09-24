@@ -1,0 +1,79 @@
+name: H3 Bridge - Verify Input Dataset
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - control/verify-h3-input-dataset.json
+
+permissions:
+  contents: write
+
+jobs:
+  verify-input-dataset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+      - name: Verify processed Dataset files
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATASET='sita2ksitas/h3-input-assets'
+          mkdir -p .bridge
+          ok=0
+          for attempt in $(seq 1 30); do
+            if kaggle datasets files "$DATASET" --page-size 100 -v -q > .bridge/files.csv 2>.bridge/error.txt; then
+              if grep -Fq 'H3_Inputs/README.txt' .bridge/files.csv && grep -Fq 'H3_Inputs/input_manifest.json' .bridge/files.csv; then
+                ok=1
+                break
+              fi
+            fi
+            sleep 5
+          done
+          cat .bridge/files.csv || true
+          if [ "$ok" -ne 1 ]; then
+            cat .bridge/error.txt >&2 || true
+            exit 1
+          fi
+          echo 'VERIFIED=1' >> "$GITHUB_ENV"
+      - name: Write result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          payload = {
+            'state': 'complete' if os.environ.get('VERIFIED') == '1' else 'failed',
+            'dataset': 'sita2ksitas/h3-input-assets',
+            'folder': 'H3_Inputs/',
+            'expected_files': ['H3_Inputs/README.txt','H3_Inputs/input_manifest.json'],
+            'production_frames_uploaded': False,
+            'github_run': f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+            'updated_at': datetime.now(timezone.utc).isoformat()
+          }
+          with open('results/verify-h3-input-dataset.json','w',encoding='utf-8') as f:
+            json.dump(payload,f,ensure_ascii=False,indent=2); f.write('\n')
+          PY
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/verify-h3-input-dataset.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report H3 input Dataset verification [skip ci]'
+          git push
