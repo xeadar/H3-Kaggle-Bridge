@@ -1,0 +1,166 @@
+name: H3 Bridge - Initialize Input Dataset
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - control/init-h3-input-dataset.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-input-dataset
+  cancel-in-progress: false
+
+jobs:
+  init-input-dataset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - name: Checkout bridge repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install kagglehub
+        run: |
+          python -m pip install --disable-pip-version-check --quiet kagglehub
+
+      - name: Prepare H3 input manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${KAGGLE_API_TOKEN:-}"
+          mkdir -p .bridge/H3_Input_Assets/H3_Inputs
+          python - <<'PY'
+          import json, pathlib
+          req = json.load(open('control/init-h3-input-dataset.json', encoding='utf-8'))
+          root = pathlib.Path('.bridge/H3_Input_Assets/H3_Inputs')
+          manifest = {
+              'schema': 'h3-input-manifest-v1',
+              'status': 'folder_initialized_waiting_for_original_frames',
+              'intended_names': {
+                  '0994': 'FIRST_FRAME.jpeg',
+                  '0993': 'LAST_FRAME.jpeg'
+              },
+              'user_reported_originals': {
+                  '0994_FIRST_FRAME': {'approx_mb': 5.7},
+                  '0993_LAST_FRAME': {'approx_mb': 7.5}
+              },
+              'chat_received_copies': {
+                  '0994_FIRST_FRAME': {
+                      'bytes': 174467,
+                      'mib': 0.16638469696044922,
+                      'dimensions': [710, 1536],
+                      'sha256': '5c4ca0ed3cae6f4a9e7582975cb393bfd574f13838e9cc258075008019619d89'
+                  },
+                  '0993_LAST_FRAME': {
+                      'bytes': 212086,
+                      'mib': 0.20226097106933594,
+                      'dimensions': [710, 1536],
+                      'sha256': '0cd2261e6234ccda0415eb3575fdaf51057b5415353efd499cdb27a1d10f0cc9'
+                  }
+              },
+              'upload_policy': 'Do not upload the chat-compressed image copies as production H3 frames. Wait for original-byte files.',
+              'purpose': 'Stable input area for H3 first/last frames and future H3 input assets.'
+          }
+          (root/'input_manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+          (root/'README.txt').write_text(
+              'H3_Inputs\n\n'
+              'Production input assets for H3 live here.\n'
+              '0994 -> FIRST_FRAME.jpeg\n'
+              '0993 -> LAST_FRAME.jpeg\n\n'
+              'The first Chat attachment copies were recompressed to about 0.17 MiB and 0.20 MiB, so they are NOT stored here as production frames.\n',
+              encoding='utf-8'
+          )
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload private Kaggle input Dataset
+        id: upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json, kagglehub
+          req = json.load(open('control/init-h3-input-dataset.json', encoding='utf-8'))
+          handle = req['target_dataset']
+          local_dir = '.bridge/H3_Input_Assets'
+          kagglehub.dataset_upload(handle, local_dir, version_notes='Initialize H3_Inputs folder and frame manifest')
+          print('DATASET_UPLOADED', handle)
+          PY
+
+      - name: Verify Dataset download and folder contents
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json, kagglehub
+          req = json.load(open('control/init-h3-input-dataset.json', encoding='utf-8'))
+          p = Path(kagglehub.dataset_download(req['target_dataset'], force_download=True))
+          manifest = p/'H3_Inputs'/'input_manifest.json'
+          readme = p/'H3_Inputs'/'README.txt'
+          if not manifest.is_file() or not readme.is_file():
+              raise SystemExit('H3_Inputs folder verification failed')
+          data = json.loads(manifest.read_text(encoding='utf-8'))
+          receipt = {
+              'state': 'complete',
+              'dataset': req['target_dataset'],
+              'folder': 'H3_Inputs/',
+              'manifest_bytes': manifest.stat().st_size,
+              'manifest_sha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+              'readme_bytes': readme.stat().st_size,
+              'production_frames_uploaded': False,
+              'reason': 'Chat copies were recompressed; originals required.'
+          }
+          Path('.bridge/receipt.json').write_text(json.dumps(receipt, indent=2)+'\n', encoding='utf-8')
+          print(json.dumps(receipt, indent=2))
+          PY
+
+      - name: Write bridge result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        shell: bash
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          try:
+              receipt = json.load(open('.bridge/receipt.json', encoding='utf-8'))
+          except Exception:
+              receipt = {'state': 'failed'}
+          receipt['github_commit'] = os.environ.get('COMMIT_SHA')
+          receipt['github_run'] = f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}"
+          receipt['updated_at'] = datetime.now(timezone.utc).isoformat()
+          with open('results/init-h3-input-dataset.json', 'w', encoding='utf-8') as f:
+              json.dump(receipt, f, ensure_ascii=False, indent=2)
+              f.write('\n')
+          PY
+
+      - name: Commit result back to bridge repository
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/init-h3-input-dataset.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Report H3 input Dataset initialization [skip ci]'
+          git push
