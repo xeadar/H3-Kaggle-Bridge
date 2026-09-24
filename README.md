@@ -1,46 +1,39 @@
-# Kaggle Gateway
+# H3 Kaggle Bridge
 
-Thin HTTP gateway for **Chat / MCP → Vercel → Kaggle**.
+Control plane for **ChatGPT → GitHub → GitHub Actions → Kaggle**.
 
-The gateway keeps Kaggle credentials on the server and exposes only a narrow set of operations for triggering an existing Kaggle kernel, polling its status, and reading kernel / dataset outputs.
+The repository is intentionally not a web server. GitHub Actions is the execution layer; Kaggle remains the compute/data platform.
 
-## Vercel environment variables
+## Current bridge test
 
-Configure these in **Vercel → Project → Settings → Environment Variables**.
+The first implemented path is deliberately non-GPU and does not touch the active Garden Tales notebook run:
 
-### Required
+1. Read `control/first-frame-request.json`.
+2. Authenticate to Kaggle using the GitHub Actions secret `KAGGLE_API_TOKEN`.
+3. Read the existing first-frame asset from `sita2ksitas/h3-first-frame-test`.
+4. Copy it into the separate private Dataset `sita2ksitas/h3-kaggle-bridge-inputs`.
+5. Verify the uploaded file is visible from Kaggle.
+6. Write the result back to `results/first-frame-upload.json`.
 
-- `KAGGLE_API_TOKEN` — Kaggle API token. Keep this secret; never commit it to GitHub.
+Successful completion proves the path:
 
-### Recommended
+`ChatGPT → GitHub → Actions → Kaggle API/CLI → Kaggle Dataset → GitHub result`
 
-- `GATEWAY_API_KEY` — a private bearer token protecting the gateway endpoints. Any long random secret is fine. When configured, requests must send:
-  `Authorization: Bearer <GATEWAY_API_KEY>`
+## Required GitHub Actions secret
 
-## API
+Repository **Settings → Secrets and variables → Actions → New repository secret**
 
-- `GET /api/health` — check Vercel → Kaggle authentication.
-- `POST /api/h3/run` — create a new version of an existing Kaggle kernel and trigger execution.
-- `GET /api/h3/status?kernel=owner/kernel-slug` — poll kernel execution status.
-- `GET /api/h3/output-files?kernel=owner/kernel-slug` — list kernel output files.
-- `GET /api/h3/output?kernel=owner/kernel-slug&file=...` — redirect to a selected kernel output file.
-- `GET /api/dataset/files?dataset=owner/dataset-slug` — list dataset files.
-- `GET /api/dataset/download?dataset=owner/dataset-slug&file=...` — redirect to a selected dataset file.
+- Name: `KAGGLE_API_TOKEN`
+- Value: the Kaggle API token from the Kaggle account settings.
 
-Interactive OpenAPI docs are available at `/docs`.
+Never commit the token to the repository.
 
-## H3 execution model
+## Files
 
-`POST /api/h3/run` does **not** wait for the Kaggle notebook to finish. It pulls the current kernel source and metadata into Vercel's temporary workspace, pushes a new version to the same Kaggle kernel, and returns after Kaggle accepts the new version. Use `/api/h3/status` to poll execution state and the output endpoints after completion.
+- `.github/workflows/first-frame-to-kaggle.yml` — first-frame Dataset transfer and verification.
+- `control/first-frame-request.json` — request/control payload.
+- `results/first-frame-upload.json` — written by Actions after a run.
 
-## Security
+## Safety boundary for this test
 
-- Kaggle credentials are read only from Vercel environment variables.
-- Secrets are never returned to the browser or intentionally written to logs.
-- Kernel / dataset identifiers are validated.
-- Arbitrary shell commands are not exposed.
-- Temporary kernel source is stored only under `/tmp` during the request.
-
-## Deploy
-
-Import this GitHub repository into Vercel, keep the repository root as the project root, add the environment variables above, and deploy. Vercel should detect the Python / FastAPI application automatically.
+This workflow does **not** start a Kaggle Notebook, request a GPU, modify Garden Tales v19, or write to the existing `h3-first-frame-test` Dataset. The source Dataset is read-only during the test; the destination is a separate private bridge Dataset.
