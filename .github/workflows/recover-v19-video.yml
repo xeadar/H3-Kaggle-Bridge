@@ -23,117 +23,77 @@ jobs:
       GARDEN_DATASET: sita2ksitas/garden-tales-pv
 
     steps:
-      - name: Checkout bridge repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install Kaggle tools
-        run: |
-          python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' kagglehub
-          kaggle --version
-
-      - name: Inspect exact v19 output files
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p .bridge/v19 .bridge/pv .bridge/return
-          kaggle kernels files "$KERNEL_VERSION" --page-size 200 -v | tee .bridge/v19-files.csv
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' kagglehub
 
       - name: Download exact v19 Notebook Output
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf .bridge/v19 .bridge/pv .bridge/return
+          mkdir -p .bridge/v19 .bridge/pv .bridge/return
+          kaggle kernels files "$KERNEL_VERSION" --page-size 200 -v | tee .bridge/v19-files.csv
           kaggle kernels output "$KERNEL_VERSION" -p .bridge/v19 -o
-          echo '--- downloaded v19 files ---'
-          find .bridge/v19 -type f -printf '%P\t%s bytes\n' | sort
 
       - name: Locate completed v19 MP4
-        id: locate
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
           import hashlib, json, os
+          root=Path('.bridge/v19')
+          def digest(p):
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for b in iter(lambda:f.read(1024*1024), b''): h.update(b)
+              return h.hexdigest()
 
-          root = Path('.bridge/v19')
-          reports = []
+          completed=[]
           for p in root.rglob('report.json'):
-              try:
-                  data = json.loads(p.read_text(encoding='utf-8'))
-              except Exception:
-                  continue
-              reports.append((p, data))
-
-          completed = [(p,d) for p,d in reports if d.get('status') == 'COMPLETE' and d.get('video_generated') is True]
-          mp4s = sorted(root.rglob('*.mp4'))
-          if not mp4s:
-              raise SystemExit('v19 Notebook Output contains no MP4.')
-
-          chosen = None
-          report_path = None
-          report = None
-          if completed:
-              report_path, report = completed[-1]
-              wanted = Path(str(report.get('mp4',''))).name
-              hits = [p for p in mp4s if p.name == wanted] if wanted else []
-              if len(hits) == 1:
-                  chosen = hits[0]
-          if chosen is None and len(mp4s) == 1:
-              chosen = mp4s[0]
-          if chosen is None:
-              details = [str(p.relative_to(root)) for p in mp4s]
-              raise SystemExit('Could not uniquely identify v19 MP4: ' + json.dumps(details))
-
-          h = hashlib.sha256()
-          with chosen.open('rb') as f:
-              for chunk in iter(lambda: f.read(1024*1024), b''):
-                  h.update(chunk)
-          sha = h.hexdigest()
-          size = chosen.stat().st_size
-          run_id = None
-          if report:
-              run_id = Path(str(report.get('output_directory',''))).name or None
-          if not run_id:
-              run_id = chosen.parent.name if chosen.parent != root else 'garden_tales_v19_recovered'
-
-          receipt = {
-              'state': 'located',
-              'kernel_version': os.environ['KERNEL_VERSION'],
-              'source_path': str(chosen.relative_to(root)),
-              'filename': chosen.name,
-              'bytes': size,
-              'sha256': sha,
-              'run_id': run_id,
-              'report_path': str(report_path.relative_to(root)) if report_path else None,
-              'report_status': report.get('status') if report else None,
-              'video_generated': report.get('video_generated') if report else None,
-              'media': report.get('media',{}) if report else {},
-          }
-          Path('.bridge/v19-located.json').write_text(json.dumps(receipt, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
-          env = Path(os.environ['GITHUB_ENV'])
-          with env.open('a', encoding='utf-8') as f:
-              print('V19_MP4=' + str(chosen.resolve()), file=f)
-              print('V19_SHA256=' + sha, file=f)
-              print('V19_BYTES=' + str(size), file=f)
-              print('V19_RUN_ID=' + run_id, file=f)
-              print('V19_FILENAME=' + chosen.name, file=f)
-              if report_path:
-                  print('V19_REPORT=' + str(report_path.resolve()), file=f)
-          print(json.dumps(receipt, indent=2, ensure_ascii=False))
+              try:d=json.loads(p.read_text(encoding='utf-8'))
+              except Exception:continue
+              if d.get('status')=='COMPLETE' and d.get('video_generated') is True:
+                  completed.append((p,d))
+          if not completed:
+              raise SystemExit('No COMPLETE/video_generated report found in v19 output.')
+          completed.sort(key=lambda x:(0 if 'H3_V10' in x[0].parts else 1, str(x[0])))
+          report_path, report=completed[0]
+          wanted=Path(str(report.get('mp4',''))).name
+          mp4s=[p for p in root.rglob('*.mp4') if not wanted or p.name==wanted]
+          if not mp4s: raise SystemExit('No v19 MP4 matching report found.')
+          groups={}
+          for p in mp4s: groups.setdefault(digest(p),[]).append(p)
+          if len(groups)!=1:
+              raise SystemExit('Multiple different v19 MP4 payloads found: '+json.dumps({k:[str(p.relative_to(root)) for p in v] for k,v in groups.items()}))
+          sha, copies=next(iter(groups.items()))
+          copies.sort(key=lambda p:(0 if 'H3_V10' in p.parts and 'Garden_Tales_PV' not in p.parts else 1, str(p)))
+          chosen=copies[0]
+          run_id=Path(str(report.get('output_directory',''))).name or chosen.parent.name
+          receipt={
+              'state':'located','kernel_version':os.environ['KERNEL_VERSION'],
+              'source_path':str(chosen.relative_to(root)),'duplicate_copies':[str(p.relative_to(root)) for p in copies],
+              'filename':chosen.name,'bytes':chosen.stat().st_size,'sha256':sha,'run_id':run_id,
+              'report_path':str(report_path.relative_to(root)),'report_status':report.get('status'),
+              'video_generated':report.get('video_generated'),'media':report.get('media',{})}
+          Path('.bridge/v19-located.json').write_text(json.dumps(receipt,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:
+              print('V19_MP4='+str(chosen.resolve()),file=f)
+              print('V19_REPORT='+str(report_path.resolve()),file=f)
+              print('V19_SHA256='+sha,file=f)
+              print('V19_BYTES='+str(chosen.stat().st_size),file=f)
+              print('V19_RUN_ID='+run_id,file=f)
+              print('V19_FILENAME='+chosen.name,file=f)
+          print(json.dumps(receipt,indent=2,ensure_ascii=False))
           PY
 
       - name: Download current Garden Tales PV
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf .bridge/pv
-          mkdir -p .bridge/pv
-          kaggle datasets download "$GARDEN_DATASET" -p .bridge/pv --unzip -o
+        run: kaggle datasets download "$GARDEN_DATASET" -p .bridge/pv --unzip -o
 
       - name: Merge v19 into Garden Tales PV snapshot
         shell: bash
@@ -141,77 +101,36 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          import hashlib, json, os, shutil
-
-          v19 = Path('.bridge/v19')
-          pv = Path('.bridge/pv')
-          ret = Path('.bridge/return')
-          ret.mkdir(parents=True, exist_ok=True)
-          mp4 = Path(os.environ['V19_MP4'])
-          run_id = os.environ['V19_RUN_ID']
-          target = pv / run_id
-          target.mkdir(parents=True, exist_ok=True)
-          dest = target / mp4.name
-
+          import hashlib,json,os,shutil
+          v19=Path('.bridge/v19'); pv=Path('.bridge/pv'); ret=Path('.bridge/return')
+          mp4=Path(os.environ['V19_MP4']); run_id=os.environ['V19_RUN_ID']; target=pv/run_id; target.mkdir(parents=True,exist_ok=True)
           def digest(p):
               h=hashlib.sha256()
               with Path(p).open('rb') as f:
-                  for b in iter(lambda:f.read(1024*1024), b''):
-                      h.update(b)
+                  for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
               return h.hexdigest()
-
-          source_sha = digest(mp4)
-          if dest.exists() and digest(dest) != source_sha:
-              raise SystemExit('Archive collision: destination exists with different SHA256: ' + str(dest))
-          if not dest.exists():
-              shutil.copy2(mp4, dest)
-
-          # Copy run metadata when present; never overwrite a different file.
-          report_candidates = list(v19.rglob('report.json'))
-          source_dir = None
-          for rp in report_candidates:
-              try:
-                  d=json.loads(rp.read_text(encoding='utf-8'))
-              except Exception:
-                  continue
-              if d.get('status')=='COMPLETE' and d.get('video_generated') is True:
-                  source_dir = rp.parent
-          if source_dir:
-              for name in ('config.json','report.json','workflow_api.json','mp4_check.log','HANDOFF.md','gpu_usage.csv','comfy.log'):
-                  src=source_dir/name
-                  if src.is_file():
-                      out=target/name
-                      if out.exists() and out.read_bytes()!=src.read_bytes():
-                          raise SystemExit('Metadata collision: '+str(out))
-                      if not out.exists(): shutil.copy2(src,out)
-
-          manifest = {
-              'workflow':'Garden Tales v19',
-              'kernel_version':os.environ['KERNEL_VERSION'],
-              'run_id':run_id,
-              'filename':mp4.name,
-              'bytes':mp4.stat().st_size,
-              'sha256':source_sha,
-              'dataset':os.environ['GARDEN_DATASET'],
-          }
+          sha=digest(mp4); dest=target/mp4.name
+          if dest.exists() and digest(dest)!=sha: raise SystemExit('PV filename collision with different content: '+str(dest))
+          if not dest.exists(): shutil.copy2(mp4,dest)
+          srcdir=Path(os.environ['V19_REPORT']).parent
+          for name in ('config.json','report.json','workflow_api.json','mp4_check.log','HANDOFF.md','gpu_usage.csv','comfy.log'):
+              src=srcdir/name
+              if src.is_file():
+                  out=target/name
+                  if out.exists() and out.read_bytes()!=src.read_bytes(): raise SystemExit('PV metadata collision: '+str(out))
+                  if not out.exists(): shutil.copy2(src,out)
+          manifest={'workflow':'Garden Tales v19','kernel_version':os.environ['KERNEL_VERSION'],'run_id':run_id,
+                    'filename':mp4.name,'bytes':mp4.stat().st_size,'sha256':sha,'dataset':os.environ['GARDEN_DATASET']}
           (target/'archive_manifest.json').write_text(json.dumps(manifest,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
-          shutil.copy2(mp4, ret / mp4.name)
+          shutil.copy2(mp4,ret/mp4.name)
           (ret/'receipt.json').write_text(json.dumps(manifest,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
-          print(json.dumps(manifest,indent=2,ensure_ascii=False))
           PY
 
       - name: Publish merged Garden Tales PV version
-        id: publish
-        shell: bash
         run: |
-          set -euo pipefail
           python - <<'PY'
           import kagglehub
-          kagglehub.dataset_upload(
-              'sita2ksitas/garden-tales-pv',
-              '.bridge/pv',
-              version_notes='Recover completed Garden Tales v19 output'
-          )
+          kagglehub.dataset_upload('sita2ksitas/garden-tales-pv','.bridge/pv',version_notes='Recover completed Garden Tales v19 output')
           PY
 
       - name: Verify v19 exists in Garden Tales PV
@@ -221,19 +140,11 @@ jobs:
           ok=0
           for attempt in $(seq 1 36); do
             if kaggle datasets files "$GARDEN_DATASET" --page-size 200 -v > .bridge/pv-files.csv 2>.bridge/pv-error.txt; then
-              if grep -Fq "$V19_FILENAME" .bridge/pv-files.csv; then
-                ok=1
-                break
-              fi
+              if grep -Fq "$V19_FILENAME" .bridge/pv-files.csv; then ok=1; break; fi
             fi
             sleep 5
           done
-          if [ "$ok" -ne 1 ]; then
-            cat .bridge/pv-error.txt >&2 || true
-            cat .bridge/pv-files.csv || true
-            exit 1
-          fi
-          grep -F "$V19_FILENAME" .bridge/pv-files.csv || true
+          [ "$ok" -eq 1 ] || { cat .bridge/pv-error.txt >&2 || true; exit 1; }
 
       - name: Upload recovered v19 video artifact
         uses: actions/upload-artifact@v4
@@ -249,35 +160,24 @@ jobs:
         env:
           RUN_ID: ${{ github.run_id }}
           REPOSITORY: ${{ github.repository }}
-        shell: bash
         run: |
           mkdir -p results
           python - <<'PY'
-          import json, os
-          from datetime import datetime, timezone
-          payload={
-              'state':'complete' if os.environ.get('V19_SHA256') else 'failed',
-              'kernel_version':os.environ.get('KERNEL_VERSION'),
-              'garden_dataset':os.environ.get('GARDEN_DATASET'),
-              'run_id':os.environ.get('V19_RUN_ID'),
-              'filename':os.environ.get('V19_FILENAME'),
-              'bytes':int(os.environ['V19_BYTES']) if os.environ.get('V19_BYTES') else None,
-              'sha256':os.environ.get('V19_SHA256'),
-              'artifact_name':'garden-tales-v19-recovered' if os.environ.get('V19_SHA256') else None,
-              'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
-              'updated_at':datetime.now(timezone.utc).isoformat(),
-          }
-          try:
-              payload['located']=json.load(open('.bridge/v19-located.json',encoding='utf-8'))
-          except Exception:
-              pass
-          with open('results/recover-v19-video.json','w',encoding='utf-8') as f:
-              json.dump(payload,f,indent=2,ensure_ascii=False);f.write('\n')
+          import json,os
+          from datetime import datetime,timezone
+          payload={'state':'complete' if os.environ.get('V19_SHA256') else 'failed','kernel_version':os.environ.get('KERNEL_VERSION'),
+                   'garden_dataset':os.environ.get('GARDEN_DATASET'),'run_id':os.environ.get('V19_RUN_ID'),'filename':os.environ.get('V19_FILENAME'),
+                   'bytes':int(os.environ['V19_BYTES']) if os.environ.get('V19_BYTES') else None,'sha256':os.environ.get('V19_SHA256'),
+                   'artifact_name':'garden-tales-v19-recovered' if os.environ.get('V19_SHA256') else None,
+                   'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+                   'updated_at':datetime.now(timezone.utc).isoformat()}
+          try: payload['located']=json.load(open('.bridge/v19-located.json',encoding='utf-8'))
+          except Exception: pass
+          with open('results/recover-v19-video.json','w',encoding='utf-8') as f: json.dump(payload,f,indent=2,ensure_ascii=False);f.write('\n')
           PY
 
       - name: Commit result back to bridge repository
         if: always()
-        shell: bash
         run: |
           git config user.name 'h3-kaggle-bridge[bot]'
           git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
