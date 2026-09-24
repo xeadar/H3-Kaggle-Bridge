@@ -1,0 +1,179 @@
+name: H3 Bridge - Fetch Baseline Video from Kaggle
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - control/fetch-baseline-video.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-fetch-baseline-video
+  cancel-in-progress: false
+
+jobs:
+  fetch-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - name: Checkout bridge repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+          kaggle --version
+
+      - name: Fetch known baseline MP4 from Kaggle Dataset
+        id: fetch
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${KAGGLE_API_TOKEN:-}" ]; then
+            echo 'KAGGLE_API_TOKEN is not configured in GitHub Actions Secrets.' >&2
+            exit 20
+          fi
+
+          python - <<'PY'
+          import json, os
+          req = json.load(open('control/fetch-baseline-video.json', encoding='utf-8'))
+          required = ['request_id', 'source_dataset', 'sha256', 'output_name']
+          missing = [k for k in required if not req.get(k)]
+          if missing:
+              raise SystemExit('Missing request fields: ' + ', '.join(missing))
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+              for key in required:
+                  value = str(req[key]).replace('\n', ' ')
+                  print(f'{key.upper()}={value}', file=f)
+              print(f"EXPECTED_BYTES={req.get('expected_bytes', '')}", file=f)
+          PY
+
+          mkdir -p .bridge/kaggle .bridge/out
+
+          # Read-only download. This does not create a Dataset version and does not touch any Notebook/GPU job.
+          kaggle datasets download "$SOURCE_DATASET" \
+            -p .bridge/kaggle \
+            --unzip -o -q
+
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, shutil
+
+          root = Path('.bridge/kaggle')
+          out = Path('.bridge/out')
+          target_sha = os.environ['SHA256'].lower()
+          expected_bytes = os.environ.get('EXPECTED_BYTES', '').strip()
+          expected_bytes = int(expected_bytes) if expected_bytes else None
+
+          def digest(path: Path):
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          candidates = []
+          match = None
+          for p in root.rglob('*.mp4'):
+              size = p.stat().st_size
+              sha = digest(p)
+              candidates.append({'path': str(p.relative_to(root)), 'bytes': size, 'sha256': sha})
+              if sha == target_sha:
+                  match = p
+                  break
+
+          if match is None:
+              print(json.dumps({'mp4_candidates': candidates}, indent=2), flush=True)
+              raise SystemExit('Known baseline MP4 SHA256 was not found in the Dataset.')
+
+          if expected_bytes is not None and match.stat().st_size != expected_bytes:
+              raise SystemExit(f'Byte-size mismatch: {match.stat().st_size} != {expected_bytes}')
+
+          dest = out / os.environ['OUTPUT_NAME']
+          shutil.copy2(match, dest)
+          receipt = {
+              'state': 'complete',
+              'source_dataset': os.environ['SOURCE_DATASET'],
+              'source_path': str(match.relative_to(root)),
+              'output_name': dest.name,
+              'bytes': dest.stat().st_size,
+              'sha256': digest(dest),
+          }
+          (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(receipt, indent=2), flush=True)
+          PY
+
+      - name: Upload returned video as GitHub Actions artifact
+        if: steps.fetch.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: garden-tales-v16-baseline
+          path: .bridge/out/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Write bridge result
+        if: always()
+        env:
+          FETCH_OUTCOME: ${{ steps.fetch.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+
+          payload = {
+              'state': 'complete' if os.environ.get('FETCH_OUTCOME') == 'success' else 'failed',
+              'request_id': os.environ.get('REQUEST_ID'),
+              'source_dataset': os.environ.get('SOURCE_DATASET'),
+              'output_name': os.environ.get('OUTPUT_NAME'),
+              'expected_sha256': os.environ.get('SHA256'),
+              'expected_bytes': os.environ.get('EXPECTED_BYTES'),
+              'artifact_name': 'garden-tales-v16-baseline' if os.environ.get('FETCH_OUTCOME') == 'success' else None,
+              'github_commit': os.environ.get('COMMIT_SHA'),
+              'github_run': f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+              'updated_at': datetime.now(timezone.utc).isoformat(),
+          }
+          try:
+              with open('.bridge/out/receipt.json', encoding='utf-8') as f:
+                  payload['kaggle_receipt'] = json.load(f)
+          except FileNotFoundError:
+              pass
+          with open('results/fetch-baseline-video.json', 'w', encoding='utf-8') as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+              f.write('\n')
+          PY
+
+      - name: Commit result back to bridge repository
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/fetch-baseline-video.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Report Kaggle baseline-video bridge result [skip ci]'
+          git push
+
+      - name: Fail workflow when fetch failed
+        if: always() && steps.fetch.outcome != 'success'
+        run: exit 1
