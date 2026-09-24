@@ -1,0 +1,12 @@
+{
+  "state": "failed",
+  "kernel_version": "sita2ksitas/garden-tales-v19/19",
+  "garden_dataset": "sita2ksitas/garden-tales-pv",
+  "run_id": null,
+  "filename": null,
+  "bytes": null,
+  "sha256": null,
+  "artifact_name": null,
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36028951339",
+  "updated_at": "2026-09-24T16:40:23.550336+00:00"
+}
