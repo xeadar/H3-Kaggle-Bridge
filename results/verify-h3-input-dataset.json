@@ -1,0 +1,12 @@
+{
+  "state": "failed",
+  "dataset": "sita2ksitas/h3-input-assets",
+  "folder": "H3_Inputs/",
+  "expected_files": [
+    "H3_Inputs/README.txt",
+    "H3_Inputs/input_manifest.json"
+  ],
+  "production_frames_uploaded": false,
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/35992831699",
+  "updated_at": "2026-09-24T11:27:21.894197+00:00"
+}
