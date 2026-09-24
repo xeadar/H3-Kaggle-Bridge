@@ -1,0 +1,49 @@
+name: H3 Bridge - Bootstrap Transport Key
+
+on:
+  push:
+    paths:
+      - control/bootstrap-transport-key.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  key:
+    runs-on: ubuntu-latest
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cryptography
+        run: python -m pip install --quiet cryptography
+      - name: Derive public transport key
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import os, json, hashlib, base64
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+          from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+          token = os.environ['KAGGLE_API_TOKEN'].encode()
+          seed = hashlib.sha256(b'H3-BRIDGE-TRANSPORT-v1\0' + token).digest()
+          priv = X25519PrivateKey.from_private_bytes(seed)
+          pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+          payload = {
+            'scheme': 'X25519+HKDF-SHA256+ChaCha20Poly1305',
+            'version': 1,
+            'public_key_b64': base64.b64encode(pub).decode('ascii')
+          }
+          open('results/transport-public-key.json','w').write(json.dumps(payload,indent=2)+'\n')
+          PY
+      - name: Commit public key
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/transport-public-key.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Publish H3 transport public key [skip ci]'
+          git push
