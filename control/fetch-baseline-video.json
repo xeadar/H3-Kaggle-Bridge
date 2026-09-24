@@ -1,0 +1,8 @@
+{
+  "request_id": "bridge-fetch-baseline-video-001",
+  "source_dataset": "sita2ksitas/garden-tales-pv",
+  "sha256": "d943b8567cc576c67b5f8d26e2e1f7e800f03a4c53ae8f6e5ee1b4df87c9f69b",
+  "expected_bytes": 845964,
+  "output_name": "Garden_Tales_v16_baseline.mp4",
+  "purpose": "Read-only bridge validation: fetch the previously verified baseline MP4 from Kaggle Dataset and return it through GitHub Actions Artifact."
+}
