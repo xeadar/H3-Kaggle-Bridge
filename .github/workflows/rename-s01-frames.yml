@@ -1,0 +1,142 @@
+name: H3 Bridge - Rename S01 Frames
+
+on:
+  push:
+    paths:
+      - control/rename-s01-frames.json
+
+permissions:
+  contents: write
+
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      DATASET: sita2ksitas/h3-input-assets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Kaggle tools
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' kagglehub
+
+      - name: Download current Dataset snapshot
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/source .bridge/verify
+          mkdir -p .bridge/source
+          kaggle datasets download -d "$DATASET" -p .bridge/source --unzip
+
+      - name: Rename exactly two frame files
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+
+          root = Path('.bridge/source')
+          mapping = {
+              'IMG_0994.HEIC': 'S01_FIRST_FRAME.HEIC',
+              'IMG_0993.HEIC': 'S01_LAST_FRAME.HEIC',
+          }
+          receipt = {'dataset': 'sita2ksitas/h3-input-assets', 'renamed': []}
+
+          for old_name, new_name in mapping.items():
+              matches = [p for p in root.rglob('*') if p.is_file() and p.name == old_name]
+              if len(matches) != 1:
+                  raise SystemExit(f'Expected exactly one {old_name}, found {len(matches)}')
+              src = matches[0]
+              dst = src.with_name(new_name)
+              if dst.exists():
+                  raise SystemExit(f'Target already exists: {dst.relative_to(root)}')
+              before = src.read_bytes()
+              sha = hashlib.sha256(before).hexdigest()
+              size = len(before)
+              src.rename(dst)
+              after = dst.read_bytes()
+              if hashlib.sha256(after).hexdigest() != sha or len(after) != size:
+                  raise SystemExit(f'Byte integrity check failed for {new_name}')
+              receipt['renamed'].append({
+                  'from': str(src.relative_to(root)),
+                  'to': str(dst.relative_to(root)),
+                  'bytes': size,
+                  'sha256': sha,
+              })
+
+          Path('.bridge/rename-receipt.json').write_text(
+              json.dumps(receipt, indent=2) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(receipt, indent=2))
+          PY
+
+      - name: Publish renamed Dataset version
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import kagglehub
+          kagglehub.dataset_upload(
+              'sita2ksitas/h3-input-assets',
+              '.bridge/source',
+              version_notes='Rename S01 first/last frames only'
+          )
+          PY
+
+      - name: Verify renamed filenames on Kaggle
+        run: |
+          set -euo pipefail
+          ok=0
+          for attempt in $(seq 1 30); do
+            if kaggle datasets files "$DATASET" --page-size 100 > .bridge/files.txt 2>.bridge/error.txt; then
+              if grep -Fq 'S01_FIRST_FRAME.HEIC' .bridge/files.txt \
+                && grep -Fq 'S01_LAST_FRAME.HEIC' .bridge/files.txt \
+                && ! grep -Fq 'IMG_0994.HEIC' .bridge/files.txt \
+                && ! grep -Fq 'IMG_0993.HEIC' .bridge/files.txt; then
+                ok=1
+                break
+              fi
+            fi
+            sleep 5
+          done
+          cat .bridge/files.txt || true
+          if [ "$ok" -ne 1 ]; then
+            cat .bridge/error.txt >&2 || true
+            exit 1
+          fi
+
+      - name: Write result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          try:
+              data = json.load(open('.bridge/rename-receipt.json', encoding='utf-8'))
+              data['state'] = 'complete'
+          except Exception:
+              data = {'state': 'failed', 'dataset': 'sita2ksitas/h3-input-assets'}
+          data['github_run'] = f"https://github.com/{os.environ['REPOSITORY']}/actions/runs/{os.environ['RUN_ID']}"
+          data['updated_at'] = datetime.now(timezone.utc).isoformat()
+          with open('results/rename-s01-frames.json', 'w', encoding='utf-8') as f:
+              json.dump(data, f, indent=2)
+              f.write('\n')
+          PY
+
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/rename-s01-frames.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report S01 frame rename [skip ci]'
+          git push
