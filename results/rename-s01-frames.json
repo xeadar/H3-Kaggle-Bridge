@@ -1,6 +1,20 @@
 {
-  "state": "failed",
   "dataset": "sita2ksitas/h3-input-assets",
-  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36001705877",
-  "updated_at": "2026-09-24T12:51:26.996304+00:00"
+  "renamed": [
+    {
+      "from": "IMG_0994.heic",
+      "to": "S01_FIRST_FRAME.HEIC",
+      "bytes": 5705336,
+      "sha256": "47511514d2f99a524098c15973da3a670eaf661d74da36d0f603b8dbed07f620"
+    },
+    {
+      "from": "IMG_0993.heic",
+      "to": "S01_LAST_FRAME.HEIC",
+      "bytes": 7474998,
+      "sha256": "139a6284c837b92eb2778e4563991374814fadf6a5f453795bd89eb8f9024888"
+    }
+  ],
+  "state": "complete",
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36001904054",
+  "updated_at": "2026-09-24T12:53:46.566332+00:00"
 }
