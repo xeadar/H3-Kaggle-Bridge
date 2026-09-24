@@ -1,0 +1,17 @@
+# Secrets
+.env
+.env.*
+kaggle.json
+.kaggle/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Vercel local state
+.vercel/
+
+# macOS
+.DS_Store
