@@ -1,0 +1,176 @@
+name: H3 Bridge - First Frame to Kaggle Dataset
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - control/first-frame-request.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-first-frame
+  cancel-in-progress: false
+
+jobs:
+  first-frame-transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - name: Checkout bridge repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+          kaggle --version
+
+      - name: Run first-frame bridge transfer
+        id: bridge
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${KAGGLE_API_TOKEN:-}" ]; then
+            echo 'KAGGLE_API_TOKEN is not configured in GitHub Actions Secrets.' >&2
+            exit 20
+          fi
+
+          python - <<'PY'
+          import json, os
+          req = json.load(open('control/first-frame-request.json', encoding='utf-8'))
+          required = ['request_id','source_dataset','source_file','target_dataset','target_title','target_file']
+          missing = [k for k in required if not req.get(k)]
+          if missing:
+              raise SystemExit('Missing request fields: ' + ', '.join(missing))
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+              for key in required:
+                  value = str(req[key]).replace('\n', ' ')
+                  print(f'{key.upper()}={value}', file=f)
+          PY
+
+          mkdir -p .bridge/source .bridge/stage
+
+          # Read-only authentication/access check against the existing first-frame Dataset.
+          kaggle datasets files "$SOURCE_DATASET" --page-size 50 -v -q > .bridge/source-files.csv
+
+          # Download the already-used first frame. This does not modify the source Dataset.
+          kaggle datasets download "$SOURCE_DATASET" \
+            -f "$SOURCE_FILE" \
+            -p .bridge/source \
+            --unzip -o -q
+
+          SRC_PATH=".bridge/source/$SOURCE_FILE"
+          if [ ! -f "$SRC_PATH" ]; then
+            echo "Downloaded first frame not found: $SRC_PATH" >&2
+            find .bridge/source -maxdepth 3 -type f -print >&2 || true
+            exit 21
+          fi
+
+          FRAME_SHA256="$(sha256sum "$SRC_PATH" | awk '{print $1}')"
+          echo "FRAME_SHA256=$FRAME_SHA256" >> "$GITHUB_ENV"
+          cp "$SRC_PATH" ".bridge/stage/$TARGET_FILE"
+
+          python - <<'PY'
+          import json, os
+          meta = {
+              'title': os.environ['TARGET_TITLE'],
+              'id': os.environ['TARGET_DATASET'],
+              'licenses': [{'name': 'other'}],
+              'description': 'Private ingress Dataset managed by xeadar/H3-Kaggle-Bridge for H3 first-frame assets.'
+          }
+          with open('.bridge/stage/dataset-metadata.json', 'w', encoding='utf-8') as f:
+              json.dump(meta, f, ensure_ascii=False, indent=2)
+          PY
+
+          if kaggle datasets files "$TARGET_DATASET" --page-size 1 -q > /dev/null 2>&1; then
+            echo 'TARGET_ACTION=version' >> "$GITHUB_ENV"
+            kaggle datasets version \
+              -p .bridge/stage \
+              -m "H3 Bridge first-frame upload ${GITHUB_SHA::7}" \
+              -q -t -r skip
+          else
+            echo 'TARGET_ACTION=create' >> "$GITHUB_ENV"
+            kaggle datasets create \
+              -p .bridge/stage \
+              -q -t -r skip
+          fi
+
+          found=0
+          for attempt in $(seq 1 18); do
+            if kaggle datasets files "$TARGET_DATASET" --page-size 200 -v -q > .bridge/target-files.csv 2>/dev/null; then
+              if grep -Fq "$TARGET_FILE" .bridge/target-files.csv; then
+                found=1
+                break
+              fi
+            fi
+            sleep 5
+          done
+
+          if [ "$found" -ne 1 ]; then
+            echo "Target Dataset did not expose $TARGET_FILE within verification window." >&2
+            exit 22
+          fi
+
+          kaggle datasets status "$TARGET_DATASET" --format json > .bridge/target-status.json 2>/dev/null || true
+          echo 'Bridge transfer verified.'
+
+      - name: Write bridge result
+        if: always()
+        env:
+          BRIDGE_OUTCOME: ${{ steps.bridge.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+
+          outcome = os.environ.get('BRIDGE_OUTCOME', 'unknown')
+          payload = {
+              'state': 'complete' if outcome == 'success' else 'failed',
+              'request_id': os.environ.get('REQUEST_ID'),
+              'source_dataset': os.environ.get('SOURCE_DATASET'),
+              'source_file': os.environ.get('SOURCE_FILE'),
+              'target_dataset': os.environ.get('TARGET_DATASET'),
+              'target_file': os.environ.get('TARGET_FILE'),
+              'target_action': os.environ.get('TARGET_ACTION'),
+              'sha256': os.environ.get('FRAME_SHA256'),
+              'github_commit': os.environ.get('COMMIT_SHA'),
+              'github_run': f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+              'updated_at': datetime.now(timezone.utc).isoformat()
+          }
+          with open('results/first-frame-upload.json', 'w', encoding='utf-8') as f:
+              json.dump(payload, f, ensure_ascii=False, indent=2)
+              f.write('\n')
+          PY
+
+      - name: Commit result back to bridge repository
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/first-frame-upload.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Report first-frame Kaggle bridge result [skip ci]'
+          git push
+
+      - name: Fail workflow when transfer failed
+        if: always() && steps.bridge.outcome != 'success'
+        run: exit 1
