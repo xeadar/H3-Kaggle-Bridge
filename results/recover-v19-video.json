@@ -1,12 +1,35 @@
 {
-  "state": "failed",
+  "state": "complete",
   "kernel_version": "sita2ksitas/garden-tales-v19/19",
   "garden_dataset": "sita2ksitas/garden-tales-pv",
-  "run_id": null,
-  "filename": null,
-  "bytes": null,
-  "sha256": null,
-  "artifact_name": null,
-  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36028951339",
-  "updated_at": "2026-09-24T16:40:23.550336+00:00"
+  "run_id": "20260924_103454_3ddedf",
+  "filename": "H3_V10_00001_.mp4",
+  "bytes": 3870885,
+  "sha256": "4b9a3268bfee973e3252fc31d488837c0d21bd508be9f77d10e4932ad3495ad4",
+  "artifact_name": "garden-tales-v19-recovered",
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36029174533",
+  "updated_at": "2026-09-24T16:42:34.646778+00:00",
+  "located": {
+    "state": "located",
+    "kernel_version": "sita2ksitas/garden-tales-v19/19",
+    "source_path": "H3_V10/20260924_103454_3ddedf/H3_V10_00001_.mp4",
+    "duplicate_copies": [
+      "H3_V10/20260924_103454_3ddedf/H3_V10_00001_.mp4",
+      "Garden_Tales_PV/20260924_103454_3ddedf/H3_V10_00001_.mp4"
+    ],
+    "filename": "H3_V10_00001_.mp4",
+    "bytes": 3870885,
+    "sha256": "4b9a3268bfee973e3252fc31d488837c0d21bd508be9f77d10e4932ad3495ad4",
+    "run_id": "20260924_103454_3ddedf",
+    "report_path": "H3_V10/20260924_103454_3ddedf/report.json",
+    "report_status": "COMPLETE",
+    "video_generated": true,
+    "media": {
+      "width": 768,
+      "height": 1344,
+      "frames": 124,
+      "fps": "24",
+      "seconds": 5.166666666666667
+    }
+  }
 }
