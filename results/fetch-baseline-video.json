@@ -1,12 +1,20 @@
 {
-  "state": "failed",
-  "request_id": "bridge-fetch-baseline-video-001",
+  "state": "complete",
+  "request_id": "bridge-fetch-baseline-video-002",
   "source_dataset": "sita2ksitas/garden-tales-pv",
   "output_name": "Garden_Tales_v16_baseline.mp4",
   "expected_sha256": "d943b8567cc576c67b5f8d26e2e1f7e800f03a4c53ae8f6e5ee1b4df87c9f69b",
   "expected_bytes": "845964",
-  "artifact_name": null,
-  "github_commit": "28faf4652577137c85f7d46bd7ef7e780f8687af",
-  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/35990695720",
-  "updated_at": "2026-09-24T11:02:44.000016+00:00"
+  "artifact_name": "garden-tales-v16-baseline",
+  "github_commit": "26adecbba2e7d16c4a6f954e69ffc38f3190da4b",
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/35990926075",
+  "updated_at": "2026-09-24T11:05:02.030504+00:00",
+  "kaggle_receipt": {
+    "state": "complete",
+    "source_dataset": "sita2ksitas/garden-tales-pv",
+    "source_path": "Garden_Tales_v15_test_320x576.mp4",
+    "output_name": "Garden_Tales_v16_baseline.mp4",
+    "bytes": 845964,
+    "sha256": "d943b8567cc576c67b5f8d26e2e1f7e800f03a4c53ae8f6e5ee1b4df87c9f69b"
+  }
 }
