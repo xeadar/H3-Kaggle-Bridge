@@ -47,8 +47,8 @@ jobs:
                   print(p.relative_to(root))
 
           mapping = {
-              'IMG_0994.HEIC': 'S01_FIRST_FRAME.HEIC',
-              'IMG_0993.HEIC': 'S01_LAST_FRAME.HEIC',
+              'IMG_0994.HEIC': 'H3_PV_妹が二日酔い_S01_FIRST_FRAME.HEIC',
+              'IMG_0993.HEIC': 'H3_PV_妹が二日酔い_S01_LAST_FRAME.HEIC',
           }
           receipt = {'dataset': 'sita2ksitas/h3-input-assets', 'renamed': []}
 
@@ -75,9 +75,9 @@ jobs:
               })
 
           Path('.bridge/rename-receipt.json').write_text(
-              json.dumps(receipt, indent=2) + '\n', encoding='utf-8'
+              json.dumps(receipt, indent=2, ensure_ascii=False) + '\n', encoding='utf-8'
           )
-          print(json.dumps(receipt, indent=2))
+          print(json.dumps(receipt, indent=2, ensure_ascii=False))
           PY
 
       - name: Publish renamed Dataset version
@@ -88,7 +88,7 @@ jobs:
           kagglehub.dataset_upload(
               'sita2ksitas/h3-input-assets',
               '.bridge/source',
-              version_notes='Rename S01 first/last frames only'
+              version_notes='Rename H3_PV_妹が二日酔い S01 first/last frames only'
           )
           PY
 
@@ -98,8 +98,8 @@ jobs:
           ok=0
           for attempt in $(seq 1 30); do
             if kaggle datasets files "$DATASET" --page-size 100 > .bridge/files.txt 2>.bridge/error.txt; then
-              if grep -Fiq 'S01_FIRST_FRAME.HEIC' .bridge/files.txt \
-                && grep -Fiq 'S01_LAST_FRAME.HEIC' .bridge/files.txt \
+              if grep -Fq 'H3_PV_妹が二日酔い_S01_FIRST_FRAME.HEIC' .bridge/files.txt \
+                && grep -Fq 'H3_PV_妹が二日酔い_S01_LAST_FRAME.HEIC' .bridge/files.txt \
                 && ! grep -Fiq 'IMG_0994.HEIC' .bridge/files.txt \
                 && ! grep -Fiq 'IMG_0993.HEIC' .bridge/files.txt; then
                 ok=1
@@ -132,7 +132,7 @@ jobs:
           data['github_run'] = f"https://github.com/{os.environ['REPOSITORY']}/actions/runs/{os.environ['RUN_ID']}"
           data['updated_at'] = datetime.now(timezone.utc).isoformat()
           with open('results/rename-s01-frames.json', 'w', encoding='utf-8') as f:
-              json.dump(data, f, indent=2)
+              json.dump(data, f, indent=2, ensure_ascii=False)
               f.write('\n')
           PY
 
