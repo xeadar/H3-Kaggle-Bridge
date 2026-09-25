@@ -1,0 +1,59 @@
+name: H3 Bridge - Inspect v20 Error
+
+on:
+  push:
+    paths:
+      - control/inspect-v20-error.json
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KERNEL: sita2ksitas/garden-tales-v20-h3-pv-s01
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+      - name: Download errored kernel output
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/v20-error && mkdir -p .bridge/v20-error
+          kaggle kernels output "$KERNEL" -p .bridge/v20-error -o || true
+          echo '--- FILES ---'
+          find .bridge/v20-error -type f -printf '%P\t%s bytes\n' | sort
+      - name: Extract failure evidence only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          root=Path('.bridge/v20-error')
+          pats=re.compile(r'(traceback|exception|error|failed|no module named|cannot|not found|valueerror|runtimeerror|importerror)',re.I)
+          hits=[]
+          for p in sorted(root.rglob('*')):
+              if not p.is_file() or p.stat().st_size>5_000_000: continue
+              try: txt=p.read_text(encoding='utf-8',errors='replace')
+              except Exception: continue
+              lines=txt.splitlines()
+              idx=[i for i,l in enumerate(lines) if pats.search(l)]
+              if not idx: continue
+              keep=set()
+              for i in idx[-12:]:
+                  keep.update(range(max(0,i-3),min(len(lines),i+5)))
+              excerpt='\n'.join(lines[i] for i in sorted(keep))
+              hits.append((str(p.relative_to(root)),excerpt[-12000:]))
+          if not hits:
+              print('NO_TEXT_ERROR_EVIDENCE_FOUND')
+          else:
+              for name,excerpt in hits[-8:]:
+                  print(f'--- {name} ---')
+                  print(excerpt)
+          PY
