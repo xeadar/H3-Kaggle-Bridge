@@ -12,21 +12,26 @@ jobs:
   fetch-model:
     runs-on: ubuntu-latest
     steps:
-      - name: Download official SwinIR-M real-SR x2 GAN model
+      - name: Download official SwinIR-M real-SR x2 GAN model and source
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p model
+          mkdir -p bundle/model bundle/source/models
           curl -L --fail --retry 5 --retry-delay 2 \
             'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth' \
-            -o model/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth
-          ls -lh model/
-          sha256sum model/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth | tee model/SHA256SUMS.txt
+            -o bundle/model/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth
+          curl -L --fail --retry 5 --retry-delay 2 \
+            'https://raw.githubusercontent.com/JingyunLiang/SwinIR/main/models/network_swinir.py' \
+            -o bundle/source/models/network_swinir.py
+          curl -L --fail --retry 5 --retry-delay 2 \
+            'https://raw.githubusercontent.com/JingyunLiang/SwinIR/main/main_test_swinir.py' \
+            -o bundle/source/main_test_swinir.py
+          sha256sum bundle/model/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth | tee bundle/model/SHA256SUMS.txt
 
-      - name: Upload model artifact
+      - name: Upload SwinIR bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: swinir-m-x2-real-sr-gan
-          path: model/
+          name: swinir-m-x2-real-sr-gan-bundle
+          path: bundle/
           if-no-files-found: error
           retention-days: 1
