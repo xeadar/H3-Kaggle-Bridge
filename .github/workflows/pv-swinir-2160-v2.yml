@@ -1,0 +1,110 @@
+name: PV SwinIR 2160 v2
+
+on:
+  push:
+    paths:
+      - control/pv-swinir-2160-v2.enc.json
+
+permissions:
+  contents: read
+
+jobs:
+  upscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' cryptography
+      - name: Decrypt request
+        run: |
+          mkdir -p .bridge
+          python - <<'PY'
+          import os,json,base64,hashlib
+          from pathlib import Path
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey,X25519PublicKey
+          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+          from cryptography.hazmat.primitives import hashes
+          from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+          enc=json.load(open('control/pv-swinir-2160-v2.enc.json'))
+          seed=hashlib.sha256(b'H3-BRIDGE-TRANSPORT-v1\0'+os.environ['KAGGLE_API_TOKEN'].encode()).digest()
+          priv=X25519PrivateKey.from_private_bytes(seed)
+          eph=X25519PublicKey.from_public_bytes(base64.b64decode(enc['ephemeral_public_key_b64']))
+          aad=b'H3-BRIDGE-CONTROL-v1'
+          key=HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=aad).derive(priv.exchange(eph))
+          plain=ChaCha20Poly1305(key).decrypt(base64.b64decode(enc['nonce_b64']),base64.b64decode(enc['ciphertext_b64']),aad)
+          if hashlib.sha256(plain).hexdigest()!=enc['request_sha256']: raise SystemExit('SHA mismatch')
+          Path('.bridge/request.json').write_bytes(plain)
+          req=json.loads(plain)
+          print({k:req.get(k) for k in ('request_id','kernel_id','target_short_side','exclude')})
+          PY
+      - name: Stage input
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge/raw .bridge/dataset/Pv
+          python - <<'PY'
+          import json,urllib.request
+          req=json.load(open('.bridge/request.json'))
+          urllib.request.urlretrieve(req['input_url'],'.bridge/raw/Pv.zip')
+          PY
+          unzip -q .bridge/raw/Pv.zip -d .bridge/raw/unpacked
+          cp .bridge/raw/unpacked/Pv/* .bridge/dataset/Pv/
+          rm -f .bridge/dataset/Pv/IMG_2446.HEIC .bridge/dataset/Pv/IMG_2446.heic .bridge/dataset/Pv/IMG_2447.HEIC .bridge/dataset/Pv/IMG_2447.heic
+          test "$(find .bridge/dataset/Pv -maxdepth 1 -type f | wc -l)" -eq 12
+      - name: Create private input Dataset
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,pathlib,time
+          slug='pv-swinir-temp-'+str(int(time.time()))
+          handle='sita2ksitas/'+slug
+          pathlib.Path('.bridge/dataset/dataset-metadata.json').write_text(json.dumps({'id':handle,'title':'PV SwinIR temporary input','licenses':[{'name':'other'}],'isPrivate':True},indent=2))
+          pathlib.Path('.bridge/dataset_handle.txt').write_text(handle)
+          PY
+          kaggle datasets create -p .bridge/dataset -r zip
+      - name: Build and submit GPU kernel
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge/kernel
+          cp .github/scripts/pv_swinir.py .bridge/kernel/pv_swinir.py
+          python - <<'PY'
+          import json,pathlib
+          req=json.load(open('.bridge/request.json'))
+          handle=pathlib.Path('.bridge/dataset_handle.txt').read_text().strip()
+          meta={'id':req['kernel_id'],'title':'PV SwinIR 2160','code_file':'pv_swinir.py','language':'python','kernel_type':'script','is_private':True,'enable_gpu':True,'enable_internet':True,'dataset_sources':[handle],'competition_sources':[],'kernel_sources':[]}
+          pathlib.Path('.bridge/kernel/kernel-metadata.json').write_text(json.dumps(meta,indent=2))
+          PY
+          kaggle kernels push -p .bridge/kernel
+      - name: Poll GPU kernel
+        run: |
+          set -euo pipefail
+          KERNEL_ID="$(python -c "import json;print(json.load(open('.bridge/request.json'))['kernel_id'])")"
+          for attempt in $(seq 1 180); do
+            out="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
+            echo "$out"
+            lower="$(echo "$out" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$lower" == *complete* ]]; then exit 0; fi
+            if [[ "$lower" == *error* || "$lower" == *failed* || "$lower" == *cancel* ]]; then exit 1; fi
+            sleep 20
+          done
+          exit 1
+      - name: Retrieve ZIP
+        run: |
+          set -euo pipefail
+          KERNEL_ID="$(python -c "import json;print(json.load(open('.bridge/request.json'))['kernel_id'])")"
+          mkdir -p .bridge/output .bridge/result
+          kaggle kernels output "$KERNEL_ID" -p .bridge/output
+          ZIP="$(find .bridge/output -type f -name 'Pv_SwinIR_2160.zip' -print -quit)"
+          test -n "$ZIP"
+          cp "$ZIP" .bridge/result/Pv_SwinIR_2160.zip
+          sha256sum .bridge/result/Pv_SwinIR_2160.zip > .bridge/result/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pv_SwinIR_2160
+          path: .bridge/result/
+          retention-days: 1
