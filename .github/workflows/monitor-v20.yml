@@ -1,0 +1,74 @@
+name: H3 Bridge - Monitor v20
+
+on:
+  push:
+    paths:
+      - control/monitor-v20.json
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+
+      - name: Load monitor request
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          req=json.load(open('control/monitor-v20.json',encoding='utf-8'))
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:
+              print('KERNEL='+req['kernel'],file=f)
+              print('REQUEST_ID='+req['request_id'],file=f)
+          PY
+
+      - name: Read current Kaggle status
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge results
+          out="$(kaggle kernels status "$KERNEL" 2>&1 || true)"
+          printf '%s\n' "$out" | tee .bridge/status.txt
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          raw=open('.bridge/status.txt',encoding='utf-8',errors='replace').read().strip()
+          low=raw.lower()
+          state='unknown'
+          for s in ('running','queued','complete','error','failed','cancelled'):
+              if s in low:
+                  state=s
+                  break
+          payload={
+              'request_id':os.environ.get('REQUEST_ID'),
+              'kernel':os.environ.get('KERNEL'),
+              'state':state,
+              'raw_status':raw,
+              'updated_at':datetime.now(timezone.utc).isoformat(),
+          }
+          with open('results/monitor-v20.json','w',encoding='utf-8') as f:
+              json.dump(payload,f,ensure_ascii=False,indent=2); f.write('\n')
+          print(json.dumps(payload,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Commit monitor result
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/monitor-v20.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report Garden Tales v20 monitor [skip ci]'
+          git pull --rebase origin main
+          git push
