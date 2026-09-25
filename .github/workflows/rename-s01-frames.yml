@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 15
     env:
       KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-      DATASET: sita2ksitas/h3-input-assets
+      DATASET_TITLE: H3_PV_妹が二日酔い
 
     steps:
       - uses: actions/checkout@v4
@@ -26,31 +26,51 @@ jobs:
       - name: Install Kaggle tools
         run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' kagglehub
 
+      - name: Resolve current Dataset handle
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge
+          kaggle datasets list -m -v > .bridge/datasets.csv
+          python - <<'PY'
+          import csv, os
+          from pathlib import Path
+
+          title = os.environ['DATASET_TITLE']
+          rows = list(csv.DictReader(open('.bridge/datasets.csv', encoding='utf-8-sig')))
+          exact = [r for r in rows if (r.get('title') or '').strip() == title]
+          if len(exact) != 1:
+              print('Available private datasets:')
+              for r in rows:
+                  print(r.get('ref'), '|', r.get('title'))
+              raise SystemExit(f'Expected exactly one Dataset titled {title!r}, found {len(exact)}')
+          ref = (exact[0].get('ref') or '').strip()
+          if not ref:
+              raise SystemExit('Resolved Dataset has no ref')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
+              print('DATASET_REF=' + ref, file=f)
+          print('DATASET_REF', ref)
+          PY
+
       - name: Download current Dataset snapshot
         run: |
           set -euo pipefail
           rm -rf .bridge/source .bridge/verify
           mkdir -p .bridge/source
-          kaggle datasets download -d "$DATASET" -p .bridge/source --unzip
+          kaggle datasets download -d "$DATASET_REF" -p .bridge/source --unzip
 
       - name: Rename exactly two frame files
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          import hashlib, json
+          import hashlib, json, os
 
           root = Path('.bridge/source')
-          print('0993/0994 candidates:')
-          for p in sorted(root.rglob('*')):
-              if p.is_file() and ('0993' in p.name.lower() or '0994' in p.name.lower()):
-                  print(p.relative_to(root))
-
           mapping = {
-              'IMG_0994.HEIC': 'H3_PV_妹が二日酔い_S01_FIRST_FRAME.HEIC',
-              'IMG_0993.HEIC': 'H3_PV_妹が二日酔い_S01_LAST_FRAME.HEIC',
+              'IMG_0994.HEIC': 'S01_FIRST_FRAME.HEIC',
+              'IMG_0993.HEIC': 'S01_LAST_FRAME.HEIC',
           }
-          receipt = {'dataset': 'sita2ksitas/h3-input-assets', 'renamed': []}
+          receipt = {'dataset': os.environ['DATASET_REF'], 'dataset_title': os.environ['DATASET_TITLE'], 'renamed': []}
 
           for old_name, new_name in mapping.items():
               matches = [p for p in root.rglob('*') if p.is_file() and p.name.lower() == old_name.lower()]
@@ -84,11 +104,11 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import kagglehub
+          import kagglehub, os
           kagglehub.dataset_upload(
-              'sita2ksitas/h3-input-assets',
+              os.environ['DATASET_REF'],
               '.bridge/source',
-              version_notes='Rename H3_PV_妹が二日酔い S01 first/last frames only'
+              version_notes='Rename S01 first/last frames only'
           )
           PY
 
@@ -97,9 +117,9 @@ jobs:
           set -euo pipefail
           ok=0
           for attempt in $(seq 1 30); do
-            if kaggle datasets files "$DATASET" --page-size 100 > .bridge/files.txt 2>.bridge/error.txt; then
-              if grep -Fq 'H3_PV_妹が二日酔い_S01_FIRST_FRAME.HEIC' .bridge/files.txt \
-                && grep -Fq 'H3_PV_妹が二日酔い_S01_LAST_FRAME.HEIC' .bridge/files.txt \
+            if kaggle datasets files "$DATASET_REF" --page-size 100 > .bridge/files.txt 2>.bridge/error.txt; then
+              if grep -Fq 'S01_FIRST_FRAME.HEIC' .bridge/files.txt \
+                && grep -Fq 'S01_LAST_FRAME.HEIC' .bridge/files.txt \
                 && ! grep -Fiq 'IMG_0994.HEIC' .bridge/files.txt \
                 && ! grep -Fiq 'IMG_0993.HEIC' .bridge/files.txt; then
                 ok=1
@@ -128,7 +148,7 @@ jobs:
               data = json.load(open('.bridge/rename-receipt.json', encoding='utf-8'))
               data['state'] = 'complete'
           except Exception:
-              data = {'state': 'failed', 'dataset': 'sita2ksitas/h3-input-assets'}
+              data = {'state': 'failed', 'dataset': os.environ.get('DATASET_REF'), 'dataset_title': os.environ.get('DATASET_TITLE')}
           data['github_run'] = f"https://github.com/{os.environ['REPOSITORY']}/actions/runs/{os.environ['RUN_ID']}"
           data['updated_at'] = datetime.now(timezone.utc).isoformat()
           with open('results/rename-s01-frames.json', 'w', encoding='utf-8') as f:
@@ -144,4 +164,5 @@ jobs:
           git add results/rename-s01-frames.json
           git diff --cached --quiet && exit 0
           git commit -m 'Report S01 frame rename [skip ci]'
+          git pull --rebase origin main
           git push
