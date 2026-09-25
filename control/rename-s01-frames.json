@@ -1,8 +1,8 @@
 {
-  "request_id": "rename-s01-frames-002",
+  "request_id": "rename-s01-frames-003",
   "dataset": "sita2ksitas/h3-input-assets",
   "rename": {
-    "IMG_0994.HEIC": "S01_FIRST_FRAME.HEIC",
-    "IMG_0993.HEIC": "S01_LAST_FRAME.HEIC"
+    "IMG_0994.HEIC": "H3_PV_妹が二日酔い_S01_FIRST_FRAME.HEIC",
+    "IMG_0993.HEIC": "H3_PV_妹が二日酔い_S01_LAST_FRAME.HEIC"
   }
 }
