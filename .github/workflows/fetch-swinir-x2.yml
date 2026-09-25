@@ -1,0 +1,32 @@
+name: Fetch SwinIR x2 model
+
+on:
+  push:
+    paths:
+      - 'control/fetch-swinir-x2.json'
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download official SwinIR-M real-SR x2 GAN model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p model
+          curl -L --fail --retry 5 --retry-delay 2 \
+            'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth' \
+            -o model/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth
+          ls -lh model/
+          sha256sum model/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth | tee model/SHA256SUMS.txt
+
+      - name: Upload model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: swinir-m-x2-real-sr-gan
+          path: model/
+          if-no-files-found: error
+          retention-days: 1
