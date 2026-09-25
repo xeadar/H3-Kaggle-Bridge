@@ -1,0 +1,312 @@
+name: PV SwinIR 2160
+
+on:
+  push:
+    paths:
+      - control/pv-swinir-2160.enc.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pv-swinir-2160
+  cancel-in-progress: false
+
+jobs:
+  upscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bridge tools
+        run: |
+          python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' cryptography
+          kaggle --version
+
+      - name: Decrypt private request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge
+          python - <<'PY'
+          import os, json, base64, hashlib
+          from pathlib import Path
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+          from cryptography.hazmat.primitives import hashes
+          from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+          enc=json.load(open('control/pv-swinir-2160.enc.json',encoding='utf-8'))
+          token=os.environ['KAGGLE_API_TOKEN'].encode()
+          seed=hashlib.sha256(b'H3-BRIDGE-TRANSPORT-v1\0'+token).digest()
+          priv=X25519PrivateKey.from_private_bytes(seed)
+          eph=X25519PublicKey.from_public_bytes(base64.b64decode(enc['ephemeral_public_key_b64']))
+          aad=b'H3-BRIDGE-CONTROL-v1'
+          key=HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=aad).derive(priv.exchange(eph))
+          plain=ChaCha20Poly1305(key).decrypt(base64.b64decode(enc['nonce_b64']),base64.b64decode(enc['ciphertext_b64']),aad)
+          if hashlib.sha256(plain).hexdigest()!=enc['request_sha256']:
+              raise SystemExit('request SHA mismatch')
+          req=json.loads(plain)
+          Path('.bridge/request.json').write_text(json.dumps(req,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps({k:req.get(k) for k in ('request_id','kernel_id','target_short_side','model','tile','tile_overlap','exclude')},ensure_ascii=False,indent=2))
+          PY
+
+      - name: Stage private source images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge/raw .bridge/dataset
+          python - <<'PY'
+          import json, urllib.request
+          req=json.load(open('.bridge/request.json',encoding='utf-8'))
+          urllib.request.urlretrieve(req['input_url'], '.bridge/raw/Pv.zip')
+          print('downloaded input zip')
+          PY
+          unzip -q .bridge/raw/Pv.zip -d .bridge/raw/unpacked
+          SRC='.bridge/raw/unpacked/Pv'
+          test -d "$SRC"
+          mkdir -p .bridge/dataset/Pv
+          find "$SRC" -maxdepth 1 -type f ! -name '._*' -exec cp -p {} .bridge/dataset/Pv/ \;
+          rm -f .bridge/dataset/Pv/IMG_2446.HEIC .bridge/dataset/Pv/IMG_2446.heic
+          rm -f .bridge/dataset/Pv/IMG_2447.HEIC .bridge/dataset/Pv/IMG_2447.heic
+          echo 'Staged files:'
+          find .bridge/dataset/Pv -maxdepth 1 -type f -printf '%f\n' | sort
+          test "$(find .bridge/dataset/Pv -maxdepth 1 -type f | wc -l)" -eq 12
+
+      - name: Create private temporary Kaggle Dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib, time
+          req=json.load(open('.bridge/request.json',encoding='utf-8'))
+          slug='pv-swinir-temp-'+str(int(time.time()))
+          handle='sita2ksitas/'+slug
+          meta={
+            'id': handle,
+            'title': 'PV SwinIR temporary input',
+            'licenses': [{'name':'other'}],
+            'isPrivate': True
+          }
+          pathlib.Path('.bridge/dataset/dataset-metadata.json').write_text(json.dumps(meta,indent=2)+'\n',encoding='utf-8')
+          pathlib.Path('.bridge/dataset_handle.txt').write_text(handle,encoding='utf-8')
+          pathlib.Path('.bridge/dataset_slug.txt').write_text(slug,encoding='utf-8')
+          print(handle)
+          PY
+          kaggle datasets create -p .bridge/dataset -r zip
+
+      - name: Build private GPU SwinIR kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge/kernel
+          python - <<'PY'
+          import json, pathlib
+          req=json.load(open('.bridge/request.json',encoding='utf-8'))
+          handle=pathlib.Path('.bridge/dataset_handle.txt').read_text().strip()
+          slug=pathlib.Path('.bridge/dataset_slug.txt').read_text().strip()
+          kernel_id=req['kernel_id']
+          meta={
+            'id': kernel_id,
+            'title': req.get('kernel_title','PV SwinIR 2160'),
+            'code_file': 'pv_swinir.py',
+            'language': 'python',
+            'kernel_type': 'script',
+            'is_private': True,
+            'enable_gpu': True,
+            'enable_internet': True,
+            'dataset_sources': [handle],
+            'competition_sources': [],
+            'kernel_sources': []
+          }
+          pathlib.Path('.bridge/kernel/kernel-metadata.json').write_text(json.dumps(meta,indent=2)+'\n',encoding='utf-8')
+          script = r'''import os, sys, subprocess, json, math, shutil, zipfile, time, traceback
+from pathlib import Path
+
+# Dependencies for HEIC and the official SwinIR source.
+subprocess.run([sys.executable,'-m','pip','install','--disable-pip-version-check','--quiet','pillow-heif','timm'],check=True)
+from pillow_heif import register_heif_opener
+register_heif_opener()
+from PIL import Image
+import numpy as np
+import torch
+
+REQ = json.loads(r__REQ__)
+DATASET_SLUG = __SLUG__
+TARGET_SHORT = int(REQ.get('target_short_side',2160))
+TILE = int(REQ.get('tile',320))
+OVERLAP = int(REQ.get('tile_overlap',32))
+SCALE = 2
+WINDOW = 8
+
+work=Path('/kaggle/working')
+src_root=Path('/kaggle/input')/DATASET_SLUG/'Pv'
+out_root=work/'Pv_SwinIR_2160'
+out_root.mkdir(parents=True,exist_ok=True)
+if not src_root.is_dir():
+    raise SystemExit(f'Input folder missing: {src_root}')
+
+repo=work/'SwinIR'
+if not repo.exists():
+    subprocess.run(['git','clone','--depth','1','https://github.com/JingyunLiang/SwinIR.git',str(repo)],check=True)
+sys.path.insert(0,str(repo))
+from models.network_swinir import SwinIR
+
+model_path=work/'003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth'
+if not model_path.exists():
+    subprocess.run(['curl','-L','--fail','--retry','5','--retry-delay','2',
+      'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth',
+      '-o',str(model_path)],check=True)
+
+device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if device.type!='cuda':
+    raise SystemExit('GPU not available')
+print('DEVICE', torch.cuda.get_device_name(0), flush=True)
+model=SwinIR(upscale=2,in_chans=3,img_size=64,window_size=8,img_range=1.,
+            depths=[6,6,6,6,6,6],embed_dim=180,num_heads=[6,6,6,6,6,6],
+            mlp_ratio=2,upsampler='nearest+conv',resi_connection='1conv')
+ckpt=torch.load(model_path,map_location='cpu')
+model.load_state_dict(ckpt['params_ema'],strict=True)
+model.eval().to(device)
+torch.set_grad_enabled(False)
+torch.backends.cudnn.benchmark=True
+
+def tile_forward(x):
+    b,c,h,w=x.shape
+    tile=min(TILE,h,w)
+    tile=tile-(tile%WINDOW)
+    if tile<=0: tile=WINDOW
+    overlap=min(OVERLAP,tile-WINDOW)
+    stride=max(WINDOW,tile-overlap)
+    h_idx=list(range(0,max(h-tile,0)+1,stride))
+    w_idx=list(range(0,max(w-tile,0)+1,stride))
+    if not h_idx or h_idx[-1]!=h-tile: h_idx.append(max(h-tile,0))
+    if not w_idx or w_idx[-1]!=w-tile: w_idx.append(max(w-tile,0))
+    E=torch.zeros((b,c,h*SCALE,w*SCALE),dtype=torch.float32,device='cpu')
+    W=torch.zeros_like(E)
+    total=len(h_idx)*len(w_idx); done=0
+    for hi in h_idx:
+        for wi in w_idx:
+            inp=x[...,hi:hi+tile,wi:wi+tile]
+            out=model(inp).float().cpu()
+            oh,ow=hi*SCALE,wi*SCALE
+            E[...,oh:oh+tile*SCALE,ow:ow+tile*SCALE]+=out
+            W[...,oh:oh+tile*SCALE,ow:ow+tile*SCALE]+=1.0
+            done+=1
+            if done%8==0 or done==total:
+                print(f'    tiles {done}/{total}',flush=True)
+    return E/W.clamp_min(1.0)
+
+def run_image(path):
+    t0=time.time()
+    im=Image.open(path).convert('RGB')
+    ow,oh=im.size
+    arr=np.asarray(im).astype(np.float32)/255.0
+    x=torch.from_numpy(arr).permute(2,0,1).unsqueeze(0)
+    # Reflect-pad full image to a multiple of the Swin window.
+    pad_h=(WINDOW-oh%WINDOW)%WINDOW
+    pad_w=(WINDOW-ow%WINDOW)%WINDOW
+    if pad_h or pad_w:
+        x=torch.nn.functional.pad(x,(0,pad_w,0,pad_h),mode='reflect')
+    x=x.to(device)
+    y=tile_forward(x)
+    y=y[...,:oh*SCALE,:ow*SCALE].clamp_(0,1)
+    arr=(y.squeeze(0).permute(1,2,0).numpy()*255.0).round().astype(np.uint8)
+    out=Image.fromarray(arr,'RGB')
+    sw,sh=out.size
+    f=TARGET_SHORT/min(sw,sh)
+    final=(round(sw*f),round(sh*f))
+    if out.size!=final:
+        out=out.resize(final,Image.Resampling.LANCZOS)
+    ext=path.suffix.lower()
+    if ext=='.png':
+        out_name=path.stem+'_SwinIR_2160.png'
+        out.save(out_root/out_name,format='PNG',compress_level=6)
+    else:
+        out_name=path.stem+'_SwinIR_2160.jpg'
+        out.save(out_root/out_name,format='JPEG',quality=97,subsampling=0,optimize=True)
+    dt=time.time()-t0
+    torch.cuda.empty_cache()
+    return {'source':path.name,'source_size':[ow,oh],'swinir_scale':2,'final_size':list(final),'output':out_name,'seconds':round(dt,2)}
+
+files=sorted([p for p in src_root.iterdir() if p.is_file() and p.name not in set(REQ.get('exclude',[])) and not p.name.startswith('._')])
+report=[]
+print('FILES',len(files),[p.name for p in files],flush=True)
+for i,p in enumerate(files,1):
+    print(f'[{i}/{len(files)}] START {p.name}',flush=True)
+    rec=run_image(p)
+    report.append(rec)
+    (out_root/'_process_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    print(f'[{i}/{len(files)}] DONE {rec}',flush=True)
+
+zip_path=work/'Pv_SwinIR_2160.zip'
+with zipfile.ZipFile(zip_path,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+    for p in sorted(out_root.iterdir()):
+        z.write(p,arcname=p.name)
+print('FINAL_ZIP',zip_path,zip_path.stat().st_size,flush=True)
+'''
+          script=script.replace('__REQ__',repr(json.dumps(req,ensure_ascii=False))).replace('__SLUG__',repr(slug))
+          pathlib.Path('.bridge/kernel/pv_swinir.py').write_text(script,encoding='utf-8')
+          print(json.dumps(meta,indent=2))
+          PY
+
+      - name: Submit GPU kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p .bridge/kernel | tee .bridge/kernel_push.log
+
+      - name: Poll kernel to completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          KERNEL_ID="$(python -c "import json;print(json.load(open('.bridge/request.json'))['kernel_id'])")"
+          for attempt in $(seq 1 180); do
+            out="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
+            printf '[%03d] %s\n' "$attempt" "$out"
+            lower="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$lower" == *"complete"* ]]; then exit 0; fi
+            if [[ "$lower" == *"error"* || "$lower" == *"failed"* || "$lower" == *"cancel"* ]]; then
+              kaggle kernels output "$KERNEL_ID" -p .bridge/failed-output || true
+              exit 1
+            fi
+            sleep 20
+          done
+          echo 'Kernel polling timed out' >&2
+          exit 1
+
+      - name: Retrieve finished ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          KERNEL_ID="$(python -c "import json;print(json.load(open('.bridge/request.json'))['kernel_id'])")"
+          mkdir -p .bridge/output .bridge/result
+          kaggle kernels output "$KERNEL_ID" -p .bridge/output
+          find .bridge/output -type f -printf '%p %s bytes\n' | sort
+          ZIP="$(find .bridge/output -type f -name 'Pv_SwinIR_2160.zip' -print -quit)"
+          test -n "$ZIP"
+          cp "$ZIP" .bridge/result/Pv_SwinIR_2160.zip
+          sha256sum .bridge/result/Pv_SwinIR_2160.zip | tee .bridge/result/SHA256SUMS.txt
+
+      - name: Upload final SwinIR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pv_SwinIR_2160
+          path: .bridge/result/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Delete temporary Kaggle Dataset
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f .bridge/dataset_handle.txt ]]; then
+            HANDLE="$(cat .bridge/dataset_handle.txt)"
+            kaggle datasets delete -d "$HANDLE" -q || true
+          fi
