@@ -68,7 +68,7 @@ jobs:
           find .bridge/kernel -maxdepth 2 -type f -printf '%P\n' | sort
           cat .bridge/kernel/kernel-metadata.json
 
-      - name: Patch S01 v20 configuration and HEIC support
+      - name: Patch S01 v20 configuration, HEIC support, and T4 split balance
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -104,6 +104,10 @@ jobs:
                         "   register_heif_opener()\n  from PIL import Image,ImageOps\n")
                   if marker not in text: raise SystemExit('v19 PIL staging marker not found')
                   text=text.replace(marker,repl)
+                  old_gpu="g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='1,1',min_free_vram_gb=0.0,max_gpus=2)"
+                  new_gpu="g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='0.6,1.4',min_free_vram_gb=0.0,max_gpus=2)"
+                  if old_gpu not in text: raise SystemExit('v19 H3MSGPUSet 1,1 marker not found')
+                  text=text.replace(old_gpu,new_gpu,1)
                   cell['source']=text; cell['outputs']=[]; cell['execution_count']=None; eh+=1
           if ch!=1 or eh!=1: raise SystemExit(f'Patch mismatch config={ch} engine={eh}')
           for cell in nb.get('cells',[]):
@@ -120,7 +124,7 @@ jobs:
           if req['input_dataset'] not in ds: ds.append(req['input_dataset'])
           meta['dataset_sources']=ds; meta['enable_internet']=True; meta['enable_gpu']=True
           meta_path.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-          print(json.dumps({'target_kernel':meta['id'],'code_file':meta['code_file'],'dataset_sources':meta.get('dataset_sources'),'enable_gpu':meta.get('enable_gpu'),'shot':{k:req[k] for k in ('first_frame','last_frame','seconds','width','height','steps','seed','timeout_minutes')}},ensure_ascii=False,indent=2))
+          print(json.dumps({'target_kernel':meta['id'],'code_file':meta['code_file'],'dataset_sources':meta.get('dataset_sources'),'enable_gpu':meta.get('enable_gpu'),'multistream':{'gpus':'0,1','shares':'0.6,1.4','max_gpus':2},'shot':{k:req[k] for k in ('first_frame','last_frame','seconds','width','height','steps','seed','timeout_minutes')}},ensure_ascii=False,indent=2))
           PY
 
       - name: Submit Garden Tales v20 to Kaggle
@@ -167,7 +171,7 @@ jobs:
           from datetime import datetime, timezone
           try: req=json.load(open('.bridge/request.json',encoding='utf-8'))
           except Exception: req={}
-          payload={'state':'submitted' if os.environ.get('PUSH_OUTCOME')=='success' and os.environ.get('STATUS_OUTCOME')=='success' else 'failed','request_id':req.get('request_id'),'source_kernel':req.get('source_kernel'),'target_kernel':req.get('target_kernel'),'actual_kernel':os.environ.get('ACTUAL_KERNEL'),'target_title':req.get('target_title'),'input_dataset':req.get('input_dataset'),'first_frame':req.get('first_frame'),'last_frame':req.get('last_frame'),'seconds':req.get('seconds'),'width':req.get('width'),'height':req.get('height'),'steps':req.get('steps'),'seed':req.get('seed'),'timeout_minutes':req.get('timeout_minutes'),'expected_frames':req.get('expected_frames'),'prompt_sha256':hashlib.sha256(req.get('prompt','').encode()).hexdigest() if req.get('prompt') else None,'kaggle_status':open('.bridge/status.log',encoding='utf-8',errors='replace').read()[-4000:] if os.path.exists('.bridge/status.log') else None,'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
+          payload={'state':'submitted' if os.environ.get('PUSH_OUTCOME')=='success' and os.environ.get('STATUS_OUTCOME')=='success' else 'failed','request_id':req.get('request_id'),'source_kernel':req.get('source_kernel'),'target_kernel':req.get('target_kernel'),'actual_kernel':os.environ.get('ACTUAL_KERNEL'),'target_title':req.get('target_title'),'input_dataset':req.get('input_dataset'),'first_frame':req.get('first_frame'),'last_frame':req.get('last_frame'),'seconds':req.get('seconds'),'width':req.get('width'),'height':req.get('height'),'steps':req.get('steps'),'seed':req.get('seed'),'timeout_minutes':req.get('timeout_minutes'),'expected_frames':req.get('expected_frames'),'multistream_shares':'0.6,1.4','prompt_sha256':hashlib.sha256(req.get('prompt','').encode()).hexdigest() if req.get('prompt') else None,'kaggle_status':open('.bridge/status.log',encoding='utf-8',errors='replace').read()[-4000:] if os.path.exists('.bridge/status.log') else None,'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
           with open('results/launch-h3-shot.json','w',encoding='utf-8') as f: json.dump(payload,f,ensure_ascii=False,indent=2); f.write('\n')
           print(json.dumps(payload,ensure_ascii=False,indent=2))
           PY
