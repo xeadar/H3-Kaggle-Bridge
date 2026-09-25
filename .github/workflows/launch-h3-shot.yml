@@ -116,7 +116,7 @@ jobs:
           if src!=target: src.unlink()
           meta_path=root/'kernel-metadata.json'; meta=json.loads(meta_path.read_text(encoding='utf-8'))
           meta['id']=req['target_kernel']; meta['title']=req['target_title']; meta['code_file']=target.name
-          ds=list(meta.get('dataset_sources') or [])
+          ds=[x for x in list(meta.get('dataset_sources') or []) if x]
           if req['input_dataset'] not in ds: ds.append(req['input_dataset'])
           meta['dataset_sources']=ds; meta['enable_internet']=True; meta['enable_gpu']=True
           meta_path.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
@@ -128,6 +128,15 @@ jobs:
         run: |
           set -euo pipefail
           kaggle kernels push -p .bridge/kernel | tee .bridge/push.log
+          python - <<'PY'
+          import os,re
+          s=open('.bridge/push.log',encoding='utf-8',errors='replace').read()
+          m=re.search(r'https://www\.kaggle\.com/(?:code/)?([^/\s]+)/([^\s]+)',s)
+          if not m: raise SystemExit('Could not parse actual Kaggle kernel URL from push output')
+          actual=f'{m.group(1)}/{m.group(2)}'.rstrip('.,)')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f: print('ACTUAL_KERNEL='+actual,file=f)
+          print('ACTUAL_KERNEL='+actual)
+          PY
 
       - name: Confirm background kernel accepted
         id: status
@@ -135,7 +144,7 @@ jobs:
           set -euo pipefail
           state=''
           for attempt in $(seq 1 30); do
-            out="$(kaggle kernels status "$TARGET_KERNEL" 2>&1 || true)"
+            out="$(kaggle kernels status "$ACTUAL_KERNEL" 2>&1 || true)"
             printf '%s\n' "$out" | tee .bridge/status.log
             lower="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
             if [[ "$lower" == *"running"* || "$lower" == *"queued"* || "$lower" == *"complete"* ]]; then state="$out"; break; fi
@@ -158,7 +167,7 @@ jobs:
           from datetime import datetime, timezone
           try: req=json.load(open('.bridge/request.json',encoding='utf-8'))
           except Exception: req={}
-          payload={'state':'submitted' if os.environ.get('PUSH_OUTCOME')=='success' and os.environ.get('STATUS_OUTCOME')=='success' else 'failed','request_id':req.get('request_id'),'source_kernel':req.get('source_kernel'),'target_kernel':req.get('target_kernel'),'target_title':req.get('target_title'),'input_dataset':req.get('input_dataset'),'first_frame':req.get('first_frame'),'last_frame':req.get('last_frame'),'seconds':req.get('seconds'),'width':req.get('width'),'height':req.get('height'),'steps':req.get('steps'),'seed':req.get('seed'),'timeout_minutes':req.get('timeout_minutes'),'expected_frames':req.get('expected_frames'),'prompt_sha256':hashlib.sha256(req.get('prompt','').encode()).hexdigest() if req.get('prompt') else None,'kaggle_status':open('.bridge/status.log',encoding='utf-8',errors='replace').read()[-4000:] if os.path.exists('.bridge/status.log') else None,'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
+          payload={'state':'submitted' if os.environ.get('PUSH_OUTCOME')=='success' and os.environ.get('STATUS_OUTCOME')=='success' else 'failed','request_id':req.get('request_id'),'source_kernel':req.get('source_kernel'),'target_kernel':req.get('target_kernel'),'actual_kernel':os.environ.get('ACTUAL_KERNEL'),'target_title':req.get('target_title'),'input_dataset':req.get('input_dataset'),'first_frame':req.get('first_frame'),'last_frame':req.get('last_frame'),'seconds':req.get('seconds'),'width':req.get('width'),'height':req.get('height'),'steps':req.get('steps'),'seed':req.get('seed'),'timeout_minutes':req.get('timeout_minutes'),'expected_frames':req.get('expected_frames'),'prompt_sha256':hashlib.sha256(req.get('prompt','').encode()).hexdigest() if req.get('prompt') else None,'kaggle_status':open('.bridge/status.log',encoding='utf-8',errors='replace').read()[-4000:] if os.path.exists('.bridge/status.log') else None,'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
           with open('results/launch-h3-shot.json','w',encoding='utf-8') as f: json.dump(payload,f,ensure_ascii=False,indent=2); f.write('\n')
           print(json.dumps(payload,ensure_ascii=False,indent=2))
           PY
