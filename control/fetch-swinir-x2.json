@@ -1,6 +1,8 @@
 {
-  "request": "fetch official SwinIR-M real-SR x2 GAN checkpoint",
+  "request": "fetch official SwinIR-M real-SR x2 GAN checkpoint and source",
   "model": "003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x2_GAN.pth",
   "purpose": "temporary local image upscaling",
-  "cleanup": true
+  "bundle_source": true,
+  "cleanup": true,
+  "revision": 2
 }
