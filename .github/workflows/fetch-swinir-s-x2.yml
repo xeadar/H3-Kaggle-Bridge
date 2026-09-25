@@ -1,0 +1,25 @@
+name: Fetch SwinIR S x2
+on:
+  push:
+    paths:
+      - control/fetch-swinir-s-x2.json
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download official lightweight SwinIR-S x2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+          curl -L --fail --retry 5 --retry-delay 2 \
+            'https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/002_lightweightSR_DIV2K_s64w8_SwinIR-S_x2.pth' \
+            -o bundle/002_lightweightSR_DIV2K_s64w8_SwinIR-S_x2.pth
+          sha256sum bundle/002_lightweightSR_DIV2K_s64w8_SwinIR-S_x2.pth > bundle/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swinir-s-x2
+          path: bundle/
+          retention-days: 1
