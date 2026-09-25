@@ -1,0 +1,21 @@
+{
+  "state": "failed",
+  "request_id": "h3-s01-v20-20260925",
+  "source_kernel": "sita2ksitas/garden-tales-v19",
+  "target_kernel": "sita2ksitas/garden-tales-v20",
+  "target_title": "Garden Tales v20 - H3_PV_妹が二日酔い S01",
+  "input_dataset": "sita2ksitas/h3-pv",
+  "first_frame": "S01_FIRST_FRAME.HEIC",
+  "last_frame": "S01_LAST_FRAME.HEIC",
+  "seconds": 8,
+  "width": 768,
+  "height": 1664,
+  "steps": 20,
+  "seed": 2026092501,
+  "timeout_minutes": 660,
+  "expected_frames": 192,
+  "prompt_sha256": "d84b65d36577c58e0f05582514619b8643f165417c81dd320cc54bce62a7cebc",
+  "kaggle_status": "Cannot access kernel 'sita2ksitas/garden-tales-v20' (Permission 'kernels.get' was denied). The most likely cause is a wrong kernel slug. The benchmark_task_slug returned by get_benchmark_leaderboard differs from the actual kernel slug — use the slug from the notebook URL (kaggle.com/code/owner/KERNEL-SLUG), not from the leaderboard. It can also occur if the notebook is private.\n",
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36102905086",
+  "updated_at": "2026-09-25T06:32:28.172993+00:00"
+}
