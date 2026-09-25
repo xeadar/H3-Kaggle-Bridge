@@ -1,0 +1,139 @@
+name: H3 Bridge - Fetch v22 Video
+
+on:
+  push:
+    paths:
+      - .github/workflows/fetch-v22-video.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-v22:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KERNEL_VERSION: sita2ksitas/garden-tales-v20-h3-pv-s01/22
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+
+      - name: Download exact v22 Notebook Output
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/v22 .bridge/return
+          mkdir -p .bridge/v22 .bridge/return
+          kaggle kernels files "$KERNEL_VERSION" --page-size 200 -v | tee .bridge/v22-files.csv
+          kaggle kernels output "$KERNEL_VERSION" -p .bridge/v22 -o
+
+      - name: Locate completed MP4
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, shutil
+          root=Path('.bridge/v22')
+          def digest(p):
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+              return h.hexdigest()
+
+          reports=[]
+          for p in root.rglob('report.json'):
+              try: d=json.loads(p.read_text(encoding='utf-8'))
+              except Exception: continue
+              if d.get('status')=='COMPLETE' and d.get('video_generated') is True:
+                  reports.append((p,d))
+          if not reports:
+              raise SystemExit('No COMPLETE/video_generated report found in v22 output')
+          reports.sort(key=lambda x:str(x[0]))
+          report_path,report=reports[0]
+          wanted=Path(str(report.get('mp4',''))).name
+          mp4s=[p for p in root.rglob('*.mp4') if not wanted or p.name==wanted]
+          if not mp4s:
+              raise SystemExit('No MP4 matching completed report found')
+          groups={}
+          for p in mp4s: groups.setdefault(digest(p),[]).append(p)
+          if len(groups)!=1:
+              raise SystemExit('Multiple different MP4 payloads found')
+          sha,copies=next(iter(groups.items()))
+          copies.sort(key=lambda p:(0 if 'H3_V10' in p.parts else 1,str(p)))
+          chosen=copies[0]
+          out=Path('.bridge/return')/chosen.name
+          shutil.copy2(chosen,out)
+          receipt={
+              'state':'complete',
+              'kernel_version':os.environ['KERNEL_VERSION'],
+              'source_path':str(chosen.relative_to(root)),
+              'filename':chosen.name,
+              'bytes':chosen.stat().st_size,
+              'sha256':sha,
+              'report_path':str(report_path.relative_to(root)),
+              'media':report.get('media',{}),
+              'run_id':Path(str(report.get('output_directory',''))).name or chosen.parent.name
+          }
+          Path('.bridge/return/receipt.json').write_text(json.dumps(receipt,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          Path('.bridge/v22-located.json').write_text(json.dumps(receipt,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:
+              print('V22_FILENAME='+chosen.name,file=f)
+              print('V22_SHA256='+sha,file=f)
+              print('V22_BYTES='+str(chosen.stat().st_size),file=f)
+          print(json.dumps(receipt,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Upload v22 video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: garden-tales-v22-video
+          path: .bridge/return/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Write bridge result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          payload={
+            'state':'complete' if os.environ.get('V22_SHA256') else 'failed',
+            'kernel_version':os.environ.get('KERNEL_VERSION'),
+            'filename':os.environ.get('V22_FILENAME'),
+            'bytes':int(os.environ['V22_BYTES']) if os.environ.get('V22_BYTES') else None,
+            'sha256':os.environ.get('V22_SHA256'),
+            'artifact_name':'garden-tales-v22-video' if os.environ.get('V22_SHA256') else None,
+            'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+            'updated_at':datetime.now(timezone.utc).isoformat()
+          }
+          try: payload['located']=json.load(open('.bridge/v22-located.json',encoding='utf-8'))
+          except Exception: pass
+          with open('results/fetch-v22-video.json','w',encoding='utf-8') as f:
+              json.dump(payload,f,indent=2,ensure_ascii=False); f.write('\n')
+          PY
+
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/fetch-v22-video.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report v22 video fetch [skip ci]'
+          git pull --rebase origin main
+          git push
