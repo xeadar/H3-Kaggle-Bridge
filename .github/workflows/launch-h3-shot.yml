@@ -1,0 +1,175 @@
+name: H3 Bridge - Launch H3 Shot
+
+on:
+  push:
+    paths:
+      - control/launch-h3-shot.enc.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-launch-h3
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bridge tools
+        run: |
+          python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' cryptography
+          kaggle --version
+
+      - name: Decrypt private launch request
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge/kernel
+          python - <<'PY'
+          import os, json, base64, hashlib
+          from pathlib import Path
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+          from cryptography.hazmat.primitives import hashes
+          from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+          enc=json.load(open('control/launch-h3-shot.enc.json',encoding='utf-8'))
+          token=os.environ['KAGGLE_API_TOKEN'].encode()
+          seed=hashlib.sha256(b'H3-BRIDGE-TRANSPORT-v1\0'+token).digest()
+          priv=X25519PrivateKey.from_private_bytes(seed)
+          eph=X25519PublicKey.from_public_bytes(base64.b64decode(enc['ephemeral_public_key_b64']))
+          aad=b'H3-BRIDGE-CONTROL-v1'
+          key=HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=aad).derive(priv.exchange(eph))
+          plain=ChaCha20Poly1305(key).decrypt(base64.b64decode(enc['nonce_b64']),base64.b64decode(enc['ciphertext_b64']),aad)
+          if hashlib.sha256(plain).hexdigest()!=enc['request_sha256']: raise SystemExit('request SHA mismatch')
+          req=json.loads(plain)
+          Path('.bridge/request.json').write_text(json.dumps(req,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:
+              for k in ('source_kernel','target_kernel','target_title','input_dataset','request_id'):
+                  print(f"{k.upper()}={req[k]}",file=f)
+              print('PROMPT_SHA256='+hashlib.sha256(req['prompt'].encode()).hexdigest(),file=f)
+          print(json.dumps({k:req[k] for k in ('request_id','source_kernel','target_kernel','input_dataset','seconds','width','height','steps','seed','expected_frames')},ensure_ascii=False,indent=2))
+          PY
+
+      - name: Pull v19 mother notebook
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/kernel && mkdir -p .bridge/kernel
+          kaggle kernels pull "$SOURCE_KERNEL" -p .bridge/kernel -m
+          find .bridge/kernel -maxdepth 2 -type f -printf '%P\n' | sort
+          cat .bridge/kernel/kernel-metadata.json
+
+      - name: Patch S01 v20 configuration and HEIC support
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          req=json.load(open('.bridge/request.json',encoding='utf-8'))
+          root=Path('.bridge/kernel')
+          notebooks=list(root.glob('*.ipynb'))
+          if len(notebooks)!=1: raise SystemExit(f'Expected one ipynb, found {[p.name for p in notebooks]}')
+          src=notebooks[0]
+          nb=json.loads(src.read_text(encoding='utf-8'))
+          config=("# B MultiStream production shot: full short-side 768, FL2VA first+last frame.\n"
+                  "CONFIG = {\n"
+                  f" 'mode': 'generate',\n 'first_frame': {req['first_frame']!r},\n 'last_frame': {req['last_frame']!r},\n"
+                  f" 'prompt': {req['prompt']!r},\n 'seconds': {int(req['seconds'])},\n 'width': {int(req['width'])},\n 'height': {int(req['height'])},\n"
+                  f" 'steps': {int(req['steps'])},\n 'seed': {int(req['seed'])},\n 'timeout_minutes': {int(req['timeout_minutes'])},\n 'verify_model_hashes': False}}\n")
+          ch=eh=0
+          for cell in nb.get('cells',[]):
+              s=cell.get('source',''); text=''.join(s) if isinstance(s,list) else s
+              if cell.get('cell_type')=='code' and 'CONFIG = {' in text and 'first_frame' in text:
+                  cell['source']=config; cell['outputs']=[]; cell['execution_count']=None; ch+=1
+              if cell.get('cell_type')=='code' and "RELEASE = 'Garden Tales v19" in text and 'def run_h3(c):' in text:
+                  text=text.replace("RELEASE = 'Garden Tales v19 / B MultiStream / 2026-09-24'","RELEASE = 'Garden Tales v20 / B MultiStream / 2026-09-25'")
+                  old="if c['width']*c['height']>768*1344:raise ValueError('Canvas exceeds the selected native H3 pixel budget; no 2K upscaling is included')"
+                  new=f"if c['width']*c['height']>{int(req['width'])}*{int(req['height'])}:raise ValueError('Canvas exceeds this shot pixel budget; no automatic upscaling is included')"
+                  if old not in text: raise SystemExit('v19 pixel guard not found')
+                  text=text.replace(old,new)
+                  marker="  # Preserve the entire input; pad to canvas rather than silently crop or distort it.\n  from PIL import Image,ImageOps\n"
+                  repl=("  # Preserve input; add HEIC/HEIF decoder when needed, then pad to canvas.\n"
+                        "  if first.suffix.lower() in ('.heic','.heif') or (last is not None and last.suffix.lower() in ('.heic','.heif')):\n"
+                        "   try:\n    from pillow_heif import register_heif_opener\n"
+                        "   except ImportError:\n    run_command([sys.executable,'-m','pip','install','--disable-pip-version-check','--quiet','pillow-heif'],out/'heic_install.log',180,env=os.environ.copy())\n    from pillow_heif import register_heif_opener\n"
+                        "   register_heif_opener()\n  from PIL import Image,ImageOps\n")
+                  if marker not in text: raise SystemExit('v19 PIL staging marker not found')
+                  text=text.replace(marker,repl)
+                  cell['source']=text; cell['outputs']=[]; cell['execution_count']=None; eh+=1
+          if ch!=1 or eh!=1: raise SystemExit(f'Patch mismatch config={ch} engine={eh}')
+          for cell in nb.get('cells',[]):
+              if cell.get('cell_type')=='markdown':
+                  s=cell.get('source',''); text=''.join(s) if isinstance(s,list) else s
+                  if text.startswith('# Garden Tales v19'):
+                      cell['source']=text.replace('# Garden Tales v19','# Garden Tales v20',1); break
+          target=root/'garden-tales-v20.ipynb'
+          target.write_text(json.dumps(nb,ensure_ascii=False,indent=1)+'\n',encoding='utf-8')
+          if src!=target: src.unlink()
+          meta_path=root/'kernel-metadata.json'; meta=json.loads(meta_path.read_text(encoding='utf-8'))
+          meta['id']=req['target_kernel']; meta['title']=req['target_title']; meta['code_file']=target.name
+          ds=list(meta.get('dataset_sources') or [])
+          if req['input_dataset'] not in ds: ds.append(req['input_dataset'])
+          meta['dataset_sources']=ds; meta['enable_internet']=True; meta['enable_gpu']=True
+          meta_path.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps({'target_kernel':meta['id'],'code_file':meta['code_file'],'dataset_sources':meta.get('dataset_sources'),'enable_gpu':meta.get('enable_gpu'),'shot':{k:req[k] for k in ('first_frame','last_frame','seconds','width','height','steps','seed','timeout_minutes')}},ensure_ascii=False,indent=2))
+          PY
+
+      - name: Submit Garden Tales v20 to Kaggle
+        id: push
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p .bridge/kernel | tee .bridge/push.log
+
+      - name: Confirm background kernel accepted
+        id: status
+        run: |
+          set -euo pipefail
+          state=''
+          for attempt in $(seq 1 30); do
+            out="$(kaggle kernels status "$TARGET_KERNEL" 2>&1 || true)"
+            printf '%s\n' "$out" | tee .bridge/status.log
+            lower="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$lower" == *"running"* || "$lower" == *"queued"* || "$lower" == *"complete"* ]]; then state="$out"; break; fi
+            if [[ "$lower" == *"error"* || "$lower" == *"failed"* ]]; then exit 1; fi
+            sleep 10
+          done
+          test -n "$state"
+
+      - name: Write launch receipt
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+          STATUS_OUTCOME: ${{ steps.status.outcome }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json, os, hashlib
+          from datetime import datetime, timezone
+          try: req=json.load(open('.bridge/request.json',encoding='utf-8'))
+          except Exception: req={}
+          payload={'state':'submitted' if os.environ.get('PUSH_OUTCOME')=='success' and os.environ.get('STATUS_OUTCOME')=='success' else 'failed','request_id':req.get('request_id'),'source_kernel':req.get('source_kernel'),'target_kernel':req.get('target_kernel'),'target_title':req.get('target_title'),'input_dataset':req.get('input_dataset'),'first_frame':req.get('first_frame'),'last_frame':req.get('last_frame'),'seconds':req.get('seconds'),'width':req.get('width'),'height':req.get('height'),'steps':req.get('steps'),'seed':req.get('seed'),'timeout_minutes':req.get('timeout_minutes'),'expected_frames':req.get('expected_frames'),'prompt_sha256':hashlib.sha256(req.get('prompt','').encode()).hexdigest() if req.get('prompt') else None,'kaggle_status':open('.bridge/status.log',encoding='utf-8',errors='replace').read()[-4000:] if os.path.exists('.bridge/status.log') else None,'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
+          with open('results/launch-h3-shot.json','w',encoding='utf-8') as f: json.dump(payload,f,ensure_ascii=False,indent=2); f.write('\n')
+          print(json.dumps(payload,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Commit launch receipt
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/launch-h3-shot.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report H3 shot launch [skip ci]'
+          git pull --rebase origin main
+          git push
