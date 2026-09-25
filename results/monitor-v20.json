@@ -1,7 +1,7 @@
 {
-  "request_id": "monitor-v20-001",
+  "request_id": "monitor-v20-002",
   "kernel": "sita2ksitas/garden-tales-v20-h3-pv-s01",
   "state": "error",
   "raw_status": "sita2ksitas/garden-tales-v20-h3-pv-s01 has status \"KernelWorkerStatus.ERROR\"",
-  "updated_at": "2026-09-25T06:50:26.460203+00:00"
+  "updated_at": "2026-09-25T08:53:01.806115+00:00"
 }
