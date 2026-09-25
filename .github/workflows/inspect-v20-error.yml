@@ -30,30 +30,29 @@ jobs:
           kaggle kernels output "$KERNEL" -p .bridge/v20-error -o || true
           echo '--- FILES ---'
           find .bridge/v20-error -type f -printf '%P\t%s bytes\n' | sort
-      - name: Extract failure evidence only
+      - name: Extract exact execution error
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
+          import json
           root=Path('.bridge/v20-error')
-          pats=re.compile(r'(traceback|exception|error|failed|no module named|cannot|not found|valueerror|runtimeerror|importerror)',re.I)
-          hits=[]
-          for p in sorted(root.rglob('*')):
-              if not p.is_file() or p.stat().st_size>5_000_000: continue
-              try: txt=p.read_text(encoding='utf-8',errors='replace')
+          for p in root.rglob('history.json'):
+              try: d=json.loads(p.read_text(encoding='utf-8'))
               except Exception: continue
-              lines=txt.splitlines()
-              idx=[i for i,l in enumerate(lines) if pats.search(l)]
-              if not idx: continue
-              keep=set()
-              for i in idx[-12:]:
-                  keep.update(range(max(0,i-3),min(len(lines),i+5)))
-              excerpt='\n'.join(lines[i] for i in sorted(keep))
-              hits.append((str(p.relative_to(root)),excerpt[-12000:]))
-          if not hits:
-              print('NO_TEXT_ERROR_EVIDENCE_FOUND')
-          else:
-              for name,excerpt in hits[-8:]:
-                  print(f'--- {name} ---')
-                  print(excerpt)
+              st=d.get('status',{}) if isinstance(d,dict) else {}
+              for item in st.get('messages',[]):
+                  if not isinstance(item,list) or len(item)!=2: continue
+                  kind,data=item
+                  if kind!='execution_error' or not isinstance(data,dict): continue
+                  out={k:data.get(k) for k in ('node_id','node_type','exception_type','exception_message')}
+                  tb=data.get('traceback') or []
+                  if tb: out['traceback_tail']=tb[-8:]
+                  print('EXACT_EXECUTION_ERROR')
+                  print(json.dumps(out,ensure_ascii=False,indent=2))
+          for p in root.rglob('report.json'):
+              try: d=json.loads(p.read_text(encoding='utf-8'))
+              except Exception: continue
+              print('REPORT_STATUS',d.get('status'))
+              err=d.get('error')
+              if err: print('REPORT_ERROR_TAIL\n'+str(err)[-5000:])
           PY
