@@ -44,14 +44,18 @@ jobs:
           for cell in nb.get('cells',[]):
               s=cell.get('source',''); text=''.join(s) if isinstance(s,list) else s
               if "g['20']=node('H3MSGPUSet'" in text:
-                  old="g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='1,1',min_free_vram_gb=0.0,max_gpus=2)"
-                  new="g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='0.6,1.4',min_free_vram_gb=0.0,max_gpus=2)"
-                  if old in text:
-                      text=text.replace(old,new,1); hits+=1
-                  elif "shares='0.6,1.4'" in text:
-                      hits+=1
-                  else:
-                      raise SystemExit('Unexpected H3MSGPUSet configuration; refusing blind patch')
+                  variants=[
+                      "g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='1,1',min_free_vram_gb=0.0,max_gpus=2)",
+                      "g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='0.6,1.4',min_free_vram_gb=0.0,max_gpus=2)",
+                      "g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='0.85,1.15',min_free_vram_gb=0.0,max_gpus=2)",
+                  ]
+                  new=variants[-1]
+                  matched=[v for v in variants if v in text]
+                  if len(matched)!=1:
+                      raise SystemExit(f'Unexpected H3MSGPUSet configuration; matched {len(matched)} known variants')
+                  if matched[0] != new:
+                      text=text.replace(matched[0],new,1)
+                  hits+=1
                   cell['source']=text
           if hits!=1: raise SystemExit(f'Expected exactly one H3MSGPUSet patch, got {hits}')
           p.write_text(json.dumps(nb,ensure_ascii=False,indent=1)+'\n',encoding='utf-8')
@@ -61,7 +65,7 @@ jobs:
           meta['enable_internet']=True
           meta['dataset_sources']=[x for x in (meta.get('dataset_sources') or []) if x]
           mp.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-          print(json.dumps({'kernel':meta.get('id'),'gpu':meta.get('enable_gpu'),'internet':meta.get('enable_internet'),'multistream_shares':'0.6,1.4'},indent=2))
+          print(json.dumps({'kernel':meta.get('id'),'gpu':meta.get('enable_gpu'),'internet':meta.get('enable_internet'),'multistream_shares':'0.85,1.15'},indent=2))
           PY
       - name: Save and Run All
         run: |
