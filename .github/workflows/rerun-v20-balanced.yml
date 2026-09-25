@@ -1,0 +1,81 @@
+name: H3 Bridge - Re-run v20 Balanced
+
+on:
+  push:
+    paths:
+      - .github/workflows/rerun-v20-balanced.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KERNEL: sita2ksitas/garden-tales-v20-h3-pv-s01
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+      - name: Pull current v20
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/v20 && mkdir -p .bridge/v20
+          kaggle kernels pull "$KERNEL" -p .bridge/v20 -m
+          find .bridge/v20 -maxdepth 2 -type f -printf '%P\n' | sort
+      - name: Rebalance H3 MultiStream and preserve shot settings
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          root=Path('.bridge/v20')
+          nbs=list(root.glob('*.ipynb'))
+          if len(nbs)!=1: raise SystemExit(f'Expected one notebook, found {[p.name for p in nbs]}')
+          p=nbs[0]
+          nb=json.loads(p.read_text(encoding='utf-8'))
+          hits=0
+          for cell in nb.get('cells',[]):
+              s=cell.get('source',''); text=''.join(s) if isinstance(s,list) else s
+              if "g['20']=node('H3MSGPUSet'" in text:
+                  old="g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='1,1',min_free_vram_gb=0.0,max_gpus=2)"
+                  new="g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='0.6,1.4',min_free_vram_gb=0.0,max_gpus=2)"
+                  if old in text:
+                      text=text.replace(old,new,1); hits+=1
+                  elif "shares='0.6,1.4'" in text:
+                      hits+=1
+                  else:
+                      raise SystemExit('Unexpected H3MSGPUSet configuration; refusing blind patch')
+                  cell['source']=text
+          if hits!=1: raise SystemExit(f'Expected exactly one H3MSGPUSet patch, got {hits}')
+          p.write_text(json.dumps(nb,ensure_ascii=False,indent=1)+'\n',encoding='utf-8')
+          mp=root/'kernel-metadata.json'
+          meta=json.loads(mp.read_text(encoding='utf-8'))
+          meta['enable_gpu']=True
+          meta['enable_internet']=True
+          meta['dataset_sources']=[x for x in (meta.get('dataset_sources') or []) if x]
+          mp.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps({'kernel':meta.get('id'),'gpu':meta.get('enable_gpu'),'internet':meta.get('enable_internet'),'multistream_shares':'0.6,1.4'},indent=2))
+          PY
+      - name: Save and Run All
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p .bridge/v20 | tee .bridge/push.log
+      - name: Confirm accepted
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            out="$(kaggle kernels status "$KERNEL" 2>&1 || true)"
+            echo "$out"
+            low="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$low" == *running* || "$low" == *queued* || "$low" == *complete* ]]; then exit 0; fi
+            if [[ "$low" == *error* || "$low" == *failed* ]]; then exit 1; fi
+            sleep 10
+          done
+          exit 1
