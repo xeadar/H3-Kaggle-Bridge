@@ -1,0 +1,116 @@
+name: H3 Bridge - Initialize Hangover PV Assets
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/init-h3-hangover-assets.yml
+
+permissions:
+  contents: write
+
+jobs:
+  init-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      DATASET: sita2ksitas/h3-pv-hangover
+      TITLE: H3_妹が二日酔い_PV
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Kaggle tools
+        run: python -m pip install --disable-pip-version-check --quiet kagglehub 'kaggle==2.2.4'
+      - name: Prepare series asset container
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/hangover-assets
+          mkdir -p .bridge/hangover-assets
+          cat > .bridge/hangover-assets/asset_manifest.json <<'JSON'
+          {
+            "schema": "h3-series-assets-v1",
+            "series": "H3_妹が二日酔い_PV",
+            "status": "container_initialized_waiting_for_exact_heic_assets",
+            "assets": [
+              {"source": "IMG_0993.heic", "target": "S01_FIRST_FRAME.HEIC"},
+              {"source": "IMG_0994.heic", "target": "S01_LAST_FRAME.HEIC"},
+              {"source": "IMG_0995.heic", "target": "S02_FIRST_FRAME.HEIC"},
+              {"source": "IMG_0996.heic", "target": "S02_LAST_FRAME.HEIC"}
+            ],
+            "note": "One Kaggle input Dataset per PV series. Preserve exact source bytes; rename only."
+          }
+          JSON
+          cat > .bridge/hangover-assets/README.txt <<'TXT'
+          H3_妹が二日酔い_PV
+
+          Series-specific H3 FL2VA input assets.
+          S01_FIRST_FRAME.HEIC
+          S01_LAST_FRAME.HEIC
+          S02_FIRST_FRAME.HEIC
+          S02_LAST_FRAME.HEIC
+          TXT
+          cat > .bridge/hangover-assets/dataset-metadata.json <<JSON
+          {
+            "title": "${TITLE}",
+            "id": "${DATASET}",
+            "licenses": [{"name": "other"}],
+            "isPrivate": true
+          }
+          JSON
+      - name: Create or update private Kaggle Dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, kagglehub
+          kagglehub.dataset_upload(os.environ['DATASET'], '.bridge/hangover-assets', version_notes='Initialize H3_妹が二日酔い_PV series asset container')
+          print('DATASET_UPLOADED', os.environ['DATASET'])
+          PY
+      - name: Verify container
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/verify
+          mkdir -p .bridge/verify
+          kaggle datasets download "$DATASET" -p .bridge/verify --unzip -o
+          test -f .bridge/verify/asset_manifest.json
+          test -f .bridge/verify/README.txt
+      - name: Write bridge result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          payload={
+            'state':'initialized',
+            'dataset':os.environ['DATASET'],
+            'title':os.environ['TITLE'],
+            'expected_assets':['S01_FIRST_FRAME.HEIC','S01_LAST_FRAME.HEIC','S02_FIRST_FRAME.HEIC','S02_LAST_FRAME.HEIC'],
+            'binary_assets_uploaded':False,
+            'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+            'updated_at':datetime.now(timezone.utc).isoformat()
+          }
+          with open('results/init-h3-hangover-assets.json','w',encoding='utf-8') as f:
+            json.dump(payload,f,ensure_ascii=False,indent=2);f.write('\n')
+          PY
+      - name: Commit result
+        if: always()
+        shell: bash
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/init-h3-hangover-assets.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report H3 hangover asset container [skip ci]'
+          git pull --rebase origin main
+          git push
