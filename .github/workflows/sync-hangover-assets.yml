@@ -1,0 +1,115 @@
+name: H3 Bridge - Sync Hangover Assets
+
+on:
+  push:
+    paths:
+      - control/sync-hangover-assets.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-sync-hangover-assets
+  cancel-in-progress: false
+
+jobs:
+  sync-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      DATASET: sita2ksitas/h3-pv-hangover
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        run: python -m pip install --disable-pip-version-check --quiet kagglehub 'kaggle==2.2.4'
+      - name: Download exact assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge/assets
+          python - <<'PY'
+          import hashlib,json,pathlib,urllib.request
+          req=json.load(open('control/sync-hangover-assets.json',encoding='utf-8'))
+          root=pathlib.Path('.bridge/assets')
+          for a in req['assets']:
+              p=root/a['name']
+              with urllib.request.urlopen(a['download_url'],timeout=120) as r, p.open('wb') as f:
+                  while True:
+                      b=r.read(1024*1024)
+                      if not b: break
+                      f.write(b)
+              b=p.read_bytes(); sha=hashlib.sha256(b).hexdigest()
+              if len(b)!=a['bytes'] or sha!=a['sha256']:
+                  raise SystemExit('Integrity mismatch '+a['name'])
+              print('ASSET_OK',a['name'],len(b),sha)
+          (root/'asset_manifest.json').write_text(json.dumps({'schema':'h3-series-assets-v1','series':'H3_妹が二日酔い_PV','status':'ready','assets':[{k:a[k] for k in ('name','bytes','sha256')} for a in req['assets']]},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (root/'README.txt').write_text('H3_妹が二日酔い_PV\n\nS01_FIRST_FRAME.HEIC\nS01_LAST_FRAME.HEIC\nS02_FIRST_FRAME.HEIC\nS02_LAST_FRAME.HEIC\n',encoding='utf-8')
+          PY
+      - name: Upload Dataset version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os,time,kagglehub
+          last=None
+          for i in range(12):
+              try:
+                  kagglehub.dataset_upload(os.environ['DATASET'],'.bridge/assets',version_notes='Add S01 and S02 exact HEIC FL2VA assets')
+                  print('DATASET_UPLOAD_OK',os.environ['DATASET'])
+                  break
+              except Exception as e:
+                  last=e; print('attempt',i+1,'failed',repr(e)); time.sleep(10)
+          else: raise last
+          PY
+      - name: Verify Dataset payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/verify && mkdir -p .bridge/verify
+          ok=0
+          for attempt in $(seq 1 24); do
+            if kaggle datasets download "$DATASET" -p .bridge/verify --unzip -o >/tmp/kaggle-verify.log 2>&1; then ok=1; break; fi
+            sleep 5
+          done
+          [ "$ok" -eq 1 ] || { cat /tmp/kaggle-verify.log >&2; exit 1; }
+          python - <<'PY'
+          import hashlib,json,pathlib
+          req=json.load(open('control/sync-hangover-assets.json',encoding='utf-8'))
+          root=pathlib.Path('.bridge/verify')
+          for a in req['assets']:
+              p=next(iter(root.rglob(a['name'])),None)
+              if p is None: raise SystemExit('Missing '+a['name'])
+              b=p.read_bytes(); sha=hashlib.sha256(b).hexdigest()
+              if len(b)!=a['bytes'] or sha!=a['sha256']: raise SystemExit('Verify mismatch '+a['name'])
+              print('VERIFY_OK',a['name'],len(b),sha)
+          PY
+      - name: Write bridge result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          try:req=json.load(open('control/sync-hangover-assets.json',encoding='utf-8'))
+          except Exception:req={}
+          payload={'state':'complete' if len(req.get('assets',[]))==4 else 'failed','dataset':os.environ.get('DATASET'),'request_id':req.get('request_id'),'assets':[{k:a.get(k) for k in ('name','bytes','sha256')} for a in req.get('assets',[])],'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
+          with open('results/sync-hangover-assets.json','w',encoding='utf-8') as f: json.dump(payload,f,ensure_ascii=False,indent=2);f.write('\n')
+          PY
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/sync-hangover-assets.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report hangover asset sync [skip ci]'
+          git pull --rebase origin main
+          git push
