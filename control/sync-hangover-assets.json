@@ -1,0 +1,30 @@
+{
+  "request_id": "sync-hangover-assets-001",
+  "dataset": "sita2ksitas/h3-pv-hangover",
+  "assets": [
+    {
+      "name": "S01_FIRST_FRAME.HEIC",
+      "bytes": 3549856,
+      "sha256": "978e9d4ea4b4443d97eb4306a9a8d7c9765e7ba3d1a037684bcfff04f4feb748",
+      "download_url": "https://uc6e9fa95c1a84164516136f18fd.dl.dropboxusercontent.com/cd/0/get/DI2iL3YroiXET7VHw_dd6_gEzrrEsgtf5yEchjnH3pCdbR3yEAbGCdz4I6JzZh8y9OdQH3BLbQzoGs41tEac36Z21hGVRpURlan2OS5U0a2xYGoS66YbkChEV-bT7cznS5dJRt1d0o1j_hosbmURyVZf960lSA24ixirfG-VdDGkgA/file?c_luid=276cce67"
+    },
+    {
+      "name": "S01_LAST_FRAME.HEIC",
+      "bytes": 3089531,
+      "sha256": "9be0462da734082c2250180f5f85fad56c6bb98ebd80e9ee99ca382818ee8d5f",
+      "download_url": "https://uc74fd42fbd70bce2f4304e5bbaf.dl.dropboxusercontent.com/cd/0/get/DI2z-eJ_slgHdsPl8qgTsP9JwIfAVN9aZkhh0EN2B3azAKlM67jJIWNwUQuKVKlACYabVQ3QEhQCn2YqKAwgs77MEoljSJHQsDNP2H8kEpyAgprIk9NZWEIE8WMCph_4qui4nx34uC8rEY8iK23aqkF6YKK4B6wIcbXLGCnV8ljI6w/file?c_luid=276cce67"
+    },
+    {
+      "name": "S02_FIRST_FRAME.HEIC",
+      "bytes": 245414,
+      "sha256": "35ccaf521b2462b86d81f8c1351543951e0f36051d45ca4b400f04fb1761f8db",
+      "download_url": "https://ucc62e527278cfc8540066c4b059.dl.dropboxusercontent.com/cd/0/get/DI31KybpxiJcsas9gXOxFbzY1uDOdLObqJesny1pDN45NVlpiky62lDrELr-0oP01_ujP-S0oxtmC0RGXVXSi7_81KN4DrlukaXLZYuEtzgtO0ZXW2X5ExLpA3zMq_CweJbG6DGUUa2D1rap4yEhHxnhk4m-zFfjpTE2tVOjCOJAcQ/file?c_luid=276cce67"
+    },
+    {
+      "name": "S02_LAST_FRAME.HEIC",
+      "bytes": 368155,
+      "sha256": "c67aed77cd1e4b9b061df02bc944bdae75c8800ddff54e040d375f6912be5791",
+      "download_url": "https://ucf7afbd7d372583dc6a64810ff7.dl.dropboxusercontent.com/cd/0/get/DI2ndkW4ENQ8qgxSGNefheZT2jsx3YW8OQ3r04bWEMKtJEQaQcW2SZk3H0T7U2SQqXcE2w67xdzZUVeH_0W7DX2CHtez2A-8wYbTm5Yfk_g6ES8zNFTVg64aDB1JOfAaH_w8Yax-f8V8HQvuiE8WZDSbdp8XNoM89_nb7ktTvYWAgw/file?c_luid=276cce67"
+    }
+  ]
+}
