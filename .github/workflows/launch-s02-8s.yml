@@ -43,7 +43,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          import json
+          import json, hashlib
 
           root=Path('.bridge/s02')
           nbs=list(root.glob('*.ipynb'))
@@ -52,21 +52,19 @@ jobs:
           src=nbs[0]
           nb=json.loads(src.read_text(encoding='utf-8'))
 
-          prompt="""8-second ultra-detailed photoreal video. Adult woman in a hotel hallway, locked low floor-level camera, no cuts, no camera movement, no other people, no text.
-
-Use first-frame and last-frame guidance strictly. Preserve the same woman, the same low hallway perspective, the same black satin slip, the same dark sheer pantyhose, and the same overall exhausted drunken atmosphere. Prioritize body continuity, identity continuity, and smooth realistic motion. Background props and small objects are secondary and should remain visually unobtrusive; do not focus on, animate, or emphasize them.
-
-Start frame: She lies face-down on the polished hallway floor, seen from a very low angle behind her legs and feet. Her body is stretched along the corridor. Her face is mostly hidden by hair and angle, close to the wall. She looks drunk, heavy, and barely conscious.
-
-End frame: She has weakly dragged herself forward and slightly changed her upper-body angle. Her head is raised and turned more toward camera side, with more of her face visible. She still remains low to the ground, exhausted and unstable, as if she has spent her last bit of strength trying to move.
-
-Motion timing:
-0–2s: Almost still. Slow heavy breathing. Subtle rise and fall in her back and shoulders. Tiny involuntary movement in fingers or toes. Hair shifts slightly.
-2–4.5s: She begins to stir weakly. One forearm and elbow slowly press into the floor. Her shoulders and upper chest lift slightly. Her body weight drags forward a little with difficulty. The movement feels slow, heavy, and drunken, with no sudden energy.
-4.5–6.5s: She continues the weak forward drag. Her upper body shifts a little farther. Her head gradually turns and lifts, revealing more of her face. Hair falls aside naturally. Her posture remains low and unstable, with realistic body weight and friction against the floor.
-6.5–8s: She settles into the final position. Her strength fades. Her head remains turned more toward camera side, her body pauses, and only faint breathing remains. End in a stable hold matching the last frame.
-
-Visual priorities: photoreal skin and hair, realistic satin and pantyhose texture, realistic body weight, smooth slow motion, subtle floor friction, exhausted intoxicated behavior, stable anatomy, stable identity, and strong first-frame / last-frame continuity. De-emphasize exact prop continuity; small objects in the hallway are secondary and must not dominate the motion."""
+          prompt=(
+              '8-second ultra-detailed photoreal video. Adult woman in a hotel hallway, locked low floor-level camera, no cuts, no camera movement, no other people, no text.\n\n'
+              'Use first-frame and last-frame guidance strictly. Preserve the same woman, the same low hallway perspective, the same black satin slip, the same dark sheer pantyhose, and the same overall exhausted drunken atmosphere. Prioritize body continuity, identity continuity, and smooth realistic motion. Background props and small objects are secondary and should remain visually unobtrusive; do not focus on, animate, or emphasize them.\n\n'
+              'Start frame: She lies face-down on the polished hallway floor, seen from a very low angle behind her legs and feet. Her body is stretched along the corridor. Her face is mostly hidden by hair and angle, close to the wall. She looks drunk, heavy, and barely conscious.\n\n'
+              'End frame: She has weakly dragged herself forward and slightly changed her upper-body angle. Her head is raised and turned more toward camera side, with more of her face visible. She still remains low to the ground, exhausted and unstable, as if she has spent her last bit of strength trying to move.\n\n'
+              'Motion timing:\n'
+              '0-2s: Almost still. Slow heavy breathing. Subtle rise and fall in her back and shoulders. Tiny involuntary movement in fingers or toes. Hair shifts slightly.\n'
+              '2-4.5s: She begins to stir weakly. One forearm and elbow slowly press into the floor. Her shoulders and upper chest lift slightly. Her body weight drags forward a little with difficulty. The movement feels slow, heavy, and drunken, with no sudden energy.\n'
+              '4.5-6.5s: She continues the weak forward drag. Her upper body shifts a little farther. Her head gradually turns and lifts, revealing more of her face. Hair falls aside naturally. Her posture remains low and unstable, with realistic body weight and friction against the floor.\n'
+              '6.5-8s: She settles into the final position. Her strength fades. Her head remains turned more toward camera side, her body pauses, and only faint breathing remains. End in a stable hold matching the last frame.\n\n'
+              'Visual priorities: photoreal skin and hair, realistic satin and pantyhose texture, realistic body weight, smooth slow motion, subtle floor friction, exhausted intoxicated behavior, stable anatomy, stable identity, and strong first-frame / last-frame continuity. De-emphasize exact prop continuity; small objects in the hallway are secondary and must not dominate the motion.'
+          )
+          (root/'prompt.sha256').write_text(hashlib.sha256(prompt.encode()).hexdigest()+'\n',encoding='utf-8')
 
           config=("# S02 production: 768x1664 / 8 s / 20 steps / FL2VA first+last.\n"
                   "CONFIG = {\n"
@@ -101,9 +99,9 @@ Visual priorities: photoreal skin and hair, realistic satin and pantyhose textur
                   matched=[x for x in known if x in text]
                   if len(matched)!=1:
                       raise SystemExit(f'Unexpected H3MSGPUSet configuration; matched {len(matched)} known variants')
-                  target=known[-1]
-                  if matched[0]!=target:
-                      text=text.replace(matched[0],target,1)
+                  target_gpu=known[-1]
+                  if matched[0]!=target_gpu:
+                      text=text.replace(matched[0],target_gpu,1)
                       cell['source']=text
                   gpu_hits+=1
           if config_hits!=1 or gpu_hits!=1:
@@ -152,7 +150,8 @@ Visual priorities: photoreal skin and hair, realistic satin and pantyhose textur
           import os,re
           s=open('.bridge/push.log',encoding='utf-8',errors='replace').read()
           m=re.search(r'https://www\.kaggle\.com/(?:code/)?([^/\s]+)/([^\s]+)',s)
-          if not m: raise SystemExit('Could not parse actual Kaggle kernel URL')
+          if not m:
+              raise SystemExit('Could not parse actual Kaggle kernel URL')
           actual=f'{m.group(1)}/{m.group(2)}'.rstrip('.,)')
           with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:
               print('ACTUAL_KERNEL='+actual,file=f)
@@ -184,23 +183,11 @@ Visual priorities: photoreal skin and hair, realistic satin and pantyhose textur
         run: |
           mkdir -p results
           python - <<'PY'
-          import json,os,hashlib
+          import json,os
           from datetime import datetime,timezone
-          prompt="""8-second ultra-detailed photoreal video. Adult woman in a hotel hallway, locked low floor-level camera, no cuts, no camera movement, no other people, no text.
-
-Use first-frame and last-frame guidance strictly. Preserve the same woman, the same low hallway perspective, the same black satin slip, the same dark sheer pantyhose, and the same overall exhausted drunken atmosphere. Prioritize body continuity, identity continuity, and smooth realistic motion. Background props and small objects are secondary and should remain visually unobtrusive; do not focus on, animate, or emphasize them.
-
-Start frame: She lies face-down on the polished hallway floor, seen from a very low angle behind her legs and feet. Her body is stretched along the corridor. Her face is mostly hidden by hair and angle, close to the wall. She looks drunk, heavy, and barely conscious.
-
-End frame: She has weakly dragged herself forward and slightly changed her upper-body angle. Her head is raised and turned more toward camera side, with more of her face visible. She still remains low to the ground, exhausted and unstable, as if she has spent her last bit of strength trying to move.
-
-Motion timing:
-0–2s: Almost still. Slow heavy breathing. Subtle rise and fall in her back and shoulders. Tiny involuntary movement in fingers or toes. Hair shifts slightly.
-2–4.5s: She begins to stir weakly. One forearm and elbow slowly press into the floor. Her shoulders and upper chest lift slightly. Her body weight drags forward a little with difficulty. The movement feels slow, heavy, and drunken, with no sudden energy.
-4.5–6.5s: She continues the weak forward drag. Her upper body shifts a little farther. Her head gradually turns and lifts, revealing more of her face. Hair falls aside naturally. Her posture remains low and unstable, with realistic body weight and friction against the floor.
-6.5–8s: She settles into the final position. Her strength fades. Her head remains turned more toward camera side, her body pauses, and only faint breathing remains. End in a stable hold matching the last frame.
-
-Visual priorities: photoreal skin and hair, realistic satin and pantyhose texture, realistic body weight, smooth slow motion, subtle floor friction, exhausted intoxicated behavior, stable anatomy, stable identity, and strong first-frame / last-frame continuity. De-emphasize exact prop continuity; small objects in the hallway are secondary and must not dominate the motion."""
+          psha=''
+          if os.path.exists('.bridge/s02/prompt.sha256'):
+              psha=open('.bridge/s02/prompt.sha256',encoding='utf-8').read().strip()
           payload={
             'state':'submitted' if os.environ.get('PUSH_OUTCOME')=='success' and os.environ.get('STATUS_OUTCOME')=='success' else 'failed',
             'shot':'S02',
@@ -212,7 +199,7 @@ Visual priorities: photoreal skin and hair, realistic satin and pantyhose textur
             'last_frame':'S02_LAST_FRAME.HEIC',
             'seconds':8,'width':768,'height':1664,'steps':20,'seed':2026092501,
             'expected_frames':192,'timeout_minutes':660,'multistream_shares':'0.85,1.15',
-            'prompt_sha256':hashlib.sha256(prompt.encode()).hexdigest(),
+            'prompt_sha256':psha,
             'kaggle_status':open('.bridge/status.log',encoding='utf-8',errors='replace').read()[-2000:] if os.path.exists('.bridge/status.log') else None,
             'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
             'updated_at':datetime.now(timezone.utc).isoformat()
