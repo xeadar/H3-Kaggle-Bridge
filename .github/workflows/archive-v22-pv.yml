@@ -1,0 +1,187 @@
+name: H3 Bridge - Archive v22 to PV
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/archive-v22-pv.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-archive-v22-pv
+  cancel-in-progress: false
+
+jobs:
+  archive-v22:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KERNEL_VERSION: sita2ksitas/garden-tales-v20-h3-pv-s01/22
+      GARDEN_DATASET: sita2ksitas/garden-tales-pv
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Kaggle tools
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' kagglehub
+
+      - name: Download exact v22 Notebook Output
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/v22 .bridge/pv .bridge/return
+          mkdir -p .bridge/v22 .bridge/pv .bridge/return
+          kaggle kernels output "$KERNEL_VERSION" -p .bridge/v22 -o
+
+      - name: Locate completed v22 MP4
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json, os, shutil
+          root=Path('.bridge/v22')
+          def digest(p):
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for b in iter(lambda:f.read(1024*1024), b''): h.update(b)
+              return h.hexdigest()
+          completed=[]
+          for p in root.rglob('report.json'):
+              try:d=json.loads(p.read_text(encoding='utf-8'))
+              except Exception:continue
+              if d.get('status')=='COMPLETE' and d.get('video_generated') is True:
+                  completed.append((p,d))
+          if not completed:
+              raise SystemExit('No COMPLETE/video_generated report found in v22 output')
+          completed.sort(key=lambda x:str(x[0]))
+          report_path, report=completed[0]
+          wanted=Path(str(report.get('mp4',''))).name
+          mp4s=[p for p in root.rglob('*.mp4') if not wanted or p.name==wanted]
+          if not mp4s: raise SystemExit('No v22 MP4 matching report found')
+          groups={}
+          for p in mp4s: groups.setdefault(digest(p),[]).append(p)
+          if len(groups)!=1:
+              raise SystemExit('Multiple different v22 MP4 payloads found')
+          sha,copies=next(iter(groups.items()))
+          copies.sort(key=lambda p:str(p))
+          chosen=copies[0]
+          run_id=Path(str(report.get('output_directory',''))).name or chosen.parent.name
+          receipt={
+              'state':'located','kernel_version':os.environ['KERNEL_VERSION'],
+              'source_path':str(chosen.relative_to(root)),'filename':chosen.name,
+              'bytes':chosen.stat().st_size,'sha256':sha,'run_id':run_id,
+              'report_path':str(report_path.relative_to(root)),'report_status':report.get('status'),
+              'video_generated':report.get('video_generated'),'media':report.get('media',{})}
+          Path('.bridge/v22-located.json').write_text(json.dumps(receipt,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          shutil.copy2(chosen, Path('.bridge/return')/'Garden_Tales_v22_768x1664_8s.mp4')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:
+              print('V22_MP4='+str(chosen.resolve()),file=f)
+              print('V22_REPORT='+str(report_path.resolve()),file=f)
+              print('V22_SHA256='+sha,file=f)
+              print('V22_BYTES='+str(chosen.stat().st_size),file=f)
+              print('V22_RUN_ID='+run_id,file=f)
+              print('V22_FILENAME='+chosen.name,file=f)
+          print(json.dumps(receipt,indent=2,ensure_ascii=False))
+          PY
+
+      - name: Download current Garden Tales PV
+        run: kaggle datasets download "$GARDEN_DATASET" -p .bridge/pv --unzip -o
+
+      - name: Merge v22 into Garden Tales PV snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json,os,shutil
+          pv=Path('.bridge/pv'); mp4=Path(os.environ['V22_MP4']); run_id=os.environ['V22_RUN_ID']
+          target=pv/run_id; target.mkdir(parents=True,exist_ok=True)
+          def digest(p):
+              h=hashlib.sha256()
+              with Path(p).open('rb') as f:
+                  for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+              return h.hexdigest()
+          sha=digest(mp4); dest=target/mp4.name
+          if dest.exists() and digest(dest)!=sha: raise SystemExit('PV filename collision with different content: '+str(dest))
+          if not dest.exists(): shutil.copy2(mp4,dest)
+          srcdir=Path(os.environ['V22_REPORT']).parent
+          for name in ('config.json','report.json','workflow_api.json','mp4_check.log','HANDOFF.md','gpu_usage.csv','comfy.log'):
+              src=srcdir/name
+              if src.is_file():
+                  out=target/name
+                  if out.exists() and out.read_bytes()!=src.read_bytes(): raise SystemExit('PV metadata collision: '+str(out))
+                  if not out.exists(): shutil.copy2(src,out)
+          manifest={'workflow':'Garden Tales v22','kernel_version':os.environ['KERNEL_VERSION'],'run_id':run_id,
+                    'filename':mp4.name,'bytes':mp4.stat().st_size,'sha256':sha,'dataset':os.environ['GARDEN_DATASET']}
+          (target/'archive_manifest.json').write_text(json.dumps(manifest,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          Path('.bridge/return/receipt.json').write_text(json.dumps(manifest,indent=2,ensure_ascii=False)+'\n',encoding='utf-8')
+          PY
+
+      - name: Publish merged Garden Tales PV version
+        run: |
+          python - <<'PY'
+          import kagglehub
+          kagglehub.dataset_upload('sita2ksitas/garden-tales-pv','.bridge/pv',version_notes='Archive completed Garden Tales v22 output')
+          PY
+
+      - name: Verify v22 exists in Garden Tales PV
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=0
+          for attempt in $(seq 1 36); do
+            if kaggle datasets files "$GARDEN_DATASET" --page-size 200 -v > .bridge/pv-files.csv 2>.bridge/pv-error.txt; then
+              if grep -Fq "$V22_FILENAME" .bridge/pv-files.csv; then ok=1; break; fi
+            fi
+            sleep 5
+          done
+          [ "$ok" -eq 1 ] || { cat .bridge/pv-error.txt >&2 || true; exit 1; }
+
+      - name: Upload archived v22 return artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: garden-tales-v22-archived
+          path: .bridge/return/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Write bridge result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          payload={'state':'complete' if os.environ.get('V22_SHA256') else 'failed',
+                   'kernel_version':os.environ.get('KERNEL_VERSION'),'garden_dataset':os.environ.get('GARDEN_DATASET'),
+                   'run_id':os.environ.get('V22_RUN_ID'),'filename':os.environ.get('V22_FILENAME'),
+                   'bytes':int(os.environ['V22_BYTES']) if os.environ.get('V22_BYTES') else None,
+                   'sha256':os.environ.get('V22_SHA256'),'artifact_name':'garden-tales-v22-archived' if os.environ.get('V22_SHA256') else None,
+                   'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+                   'updated_at':datetime.now(timezone.utc).isoformat()}
+          try: payload['located']=json.load(open('.bridge/v22-located.json',encoding='utf-8'))
+          except Exception: pass
+          with open('results/archive-v22-pv.json','w',encoding='utf-8') as f: json.dump(payload,f,indent=2,ensure_ascii=False);f.write('\n')
+          PY
+
+      - name: Commit result back to bridge repository
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/archive-v22-pv.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report Garden Tales v22 archive [skip ci]'
+          git pull --rebase origin main
+          git push
