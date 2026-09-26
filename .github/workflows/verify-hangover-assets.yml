@@ -1,0 +1,91 @@
+name: H3 Bridge - Verify Hangover Assets
+
+on:
+  push:
+    paths:
+      - control/verify-hangover-assets.json
+
+permissions:
+  contents: write
+
+jobs:
+  verify-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      DATASET: sita2ksitas/h3-pv-hangover
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+      - name: Wait for processed Dataset and verify exact assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/verify
+          mkdir -p .bridge/verify
+          ok=0
+          for attempt in $(seq 1 60); do
+            rm -rf .bridge/verify/*
+            if kaggle datasets download "$DATASET" -p .bridge/verify --unzip -o >/tmp/kaggle-verify.log 2>&1; then
+              if python - <<'PY'
+          import hashlib,pathlib,sys
+          expected={
+            'S01_FIRST_FRAME.HEIC':(3549856,'978e9d4ea4b4443d97eb4306a9a8d7c9765e7ba3d1a037684bcfff04f4feb748'),
+            'S01_LAST_FRAME.HEIC':(3089531,'9be0462da734082c2250180f5f85fad56c6bb98ebd80e9ee99ca382818ee8d5f'),
+            'S02_FIRST_FRAME.HEIC':(245414,'35ccaf521b2462b86d81f8c1351543951e0f36051d45ca4b400f04fb1761f8db'),
+            'S02_LAST_FRAME.HEIC':(368155,'c67aed77cd1e4b9b061df02bc944bdae75c8800ddff54e040d375f6912be5791')}
+          root=pathlib.Path('.bridge/verify')
+          for name,(size,sha) in expected.items():
+              hits=list(root.rglob(name))
+              if not hits: sys.exit(2)
+              b=hits[0].read_bytes()
+              if len(b)!=size or hashlib.sha256(b).hexdigest()!=sha: sys.exit(3)
+          PY
+              then ok=1; break; fi
+            fi
+            sleep 10
+          done
+          [ "$ok" -eq 1 ] || { cat /tmp/kaggle-verify.log >&2 || true; exit 1; }
+          python - <<'PY'
+          import hashlib,json,pathlib
+          expected={
+            'S01_FIRST_FRAME.HEIC':(3549856,'978e9d4ea4b4443d97eb4306a9a8d7c9765e7ba3d1a037684bcfff04f4feb748'),
+            'S01_LAST_FRAME.HEIC':(3089531,'9be0462da734082c2250180f5f85fad56c6bb98ebd80e9ee99ca382818ee8d5f'),
+            'S02_FIRST_FRAME.HEIC':(245414,'35ccaf521b2462b86d81f8c1351543951e0f36051d45ca4b400f04fb1761f8db'),
+            'S02_LAST_FRAME.HEIC':(368155,'c67aed77cd1e4b9b061df02bc944bdae75c8800ddff54e040d375f6912be5791')}
+          root=pathlib.Path('.bridge/verify'); rows=[]
+          for name,(size,sha) in expected.items():
+              p=next(root.rglob(name)); b=p.read_bytes(); rows.append({'name':name,'bytes':len(b),'sha256':hashlib.sha256(b).hexdigest()})
+          pathlib.Path('.bridge/verified.json').write_text(json.dumps(rows,indent=2)+'\n')
+          print(json.dumps(rows,indent=2))
+          PY
+      - name: Write result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          try: assets=json.load(open('.bridge/verified.json'))
+          except Exception: assets=[]
+          payload={'state':'complete' if len(assets)==4 else 'failed','dataset':os.environ.get('DATASET'),'assets':assets,'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
+          with open('results/verify-hangover-assets.json','w') as f: json.dump(payload,f,indent=2);f.write('\n')
+          PY
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/verify-hangover-assets.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report hangover asset verification [skip ci]'
+          git pull --rebase origin main
+          git push
