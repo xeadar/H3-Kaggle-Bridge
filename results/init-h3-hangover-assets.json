@@ -1,0 +1,14 @@
+{
+  "state": "initialized",
+  "dataset": "sita2ksitas/h3-pv-hangover",
+  "title": "H3_妹が二日酔い_PV",
+  "expected_assets": [
+    "S01_FIRST_FRAME.HEIC",
+    "S01_LAST_FRAME.HEIC",
+    "S02_FIRST_FRAME.HEIC",
+    "S02_LAST_FRAME.HEIC"
+  ],
+  "binary_assets_uploaded": false,
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36240933903",
+  "updated_at": "2026-09-26T12:07:52.390848+00:00"
+}
