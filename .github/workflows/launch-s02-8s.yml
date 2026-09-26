@@ -1,0 +1,234 @@
+name: H3 Bridge - Launch S02 8s
+
+on:
+  push:
+    paths:
+      - .github/workflows/launch-s02-8s.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-s02-8s
+  cancel-in-progress: false
+
+jobs:
+  launch-s02:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      SOURCE_KERNEL: sita2ksitas/garden-tales-v20-h3-pv-s01
+      TARGET_KERNEL: sita2ksitas/garden-tales-v20-h3-pv-s02
+      INPUT_DATASET: sita2ksitas/h3-pv-hangover
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+
+      - name: Pull proven S01 notebook
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/s02 && mkdir -p .bridge/s02
+          kaggle kernels pull "$SOURCE_KERNEL" -p .bridge/s02 -m
+          find .bridge/s02 -maxdepth 2 -type f -printf '%P\n' | sort
+
+      - name: Patch S02 production configuration
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          root=Path('.bridge/s02')
+          nbs=list(root.glob('*.ipynb'))
+          if len(nbs)!=1:
+              raise SystemExit(f'Expected one notebook, found {[p.name for p in nbs]}')
+          src=nbs[0]
+          nb=json.loads(src.read_text(encoding='utf-8'))
+
+          prompt="""8-second ultra-detailed photoreal video. Adult woman in a hotel hallway, locked low floor-level camera, no cuts, no camera movement, no other people, no text.
+
+Use first-frame and last-frame guidance strictly. Preserve the same woman, the same low hallway perspective, the same black satin slip, the same dark sheer pantyhose, and the same overall exhausted drunken atmosphere. Prioritize body continuity, identity continuity, and smooth realistic motion. Background props and small objects are secondary and should remain visually unobtrusive; do not focus on, animate, or emphasize them.
+
+Start frame: She lies face-down on the polished hallway floor, seen from a very low angle behind her legs and feet. Her body is stretched along the corridor. Her face is mostly hidden by hair and angle, close to the wall. She looks drunk, heavy, and barely conscious.
+
+End frame: She has weakly dragged herself forward and slightly changed her upper-body angle. Her head is raised and turned more toward camera side, with more of her face visible. She still remains low to the ground, exhausted and unstable, as if she has spent her last bit of strength trying to move.
+
+Motion timing:
+0–2s: Almost still. Slow heavy breathing. Subtle rise and fall in her back and shoulders. Tiny involuntary movement in fingers or toes. Hair shifts slightly.
+2–4.5s: She begins to stir weakly. One forearm and elbow slowly press into the floor. Her shoulders and upper chest lift slightly. Her body weight drags forward a little with difficulty. The movement feels slow, heavy, and drunken, with no sudden energy.
+4.5–6.5s: She continues the weak forward drag. Her upper body shifts a little farther. Her head gradually turns and lifts, revealing more of her face. Hair falls aside naturally. Her posture remains low and unstable, with realistic body weight and friction against the floor.
+6.5–8s: She settles into the final position. Her strength fades. Her head remains turned more toward camera side, her body pauses, and only faint breathing remains. End in a stable hold matching the last frame.
+
+Visual priorities: photoreal skin and hair, realistic satin and pantyhose texture, realistic body weight, smooth slow motion, subtle floor friction, exhausted intoxicated behavior, stable anatomy, stable identity, and strong first-frame / last-frame continuity. De-emphasize exact prop continuity; small objects in the hallway are secondary and must not dominate the motion."""
+
+          config=("# S02 production: 768x1664 / 8 s / 20 steps / FL2VA first+last.\n"
+                  "CONFIG = {\n"
+                  " 'mode': 'generate',\n"
+                  " 'first_frame': 'S02_FIRST_FRAME.HEIC',\n"
+                  " 'last_frame': 'S02_LAST_FRAME.HEIC',\n"
+                  f" 'prompt': {prompt!r},\n"
+                  " 'seconds': 8,\n"
+                  " 'width': 768,\n"
+                  " 'height': 1664,\n"
+                  " 'steps': 20,\n"
+                  " 'seed': 2026092501,\n"
+                  " 'timeout_minutes': 660,\n"
+                  " 'verify_model_hashes': False}\n")
+
+          config_hits=0
+          gpu_hits=0
+          for cell in nb.get('cells',[]):
+              s=cell.get('source','')
+              text=''.join(s) if isinstance(s,list) else s
+              if cell.get('cell_type')=='code' and 'CONFIG = {' in text and 'first_frame' in text:
+                  cell['source']=config
+                  cell['outputs']=[]
+                  cell['execution_count']=None
+                  config_hits+=1
+              if "g['20']=node('H3MSGPUSet'" in text:
+                  known=[
+                      "g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='1,1',min_free_vram_gb=0.0,max_gpus=2)",
+                      "g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='0.6,1.4',min_free_vram_gb=0.0,max_gpus=2)",
+                      "g['20']=node('H3MSGPUSet',gpus='0,1',exclude='',shares='0.85,1.15',min_free_vram_gb=0.0,max_gpus=2)",
+                  ]
+                  matched=[x for x in known if x in text]
+                  if len(matched)!=1:
+                      raise SystemExit(f'Unexpected H3MSGPUSet configuration; matched {len(matched)} known variants')
+                  target=known[-1]
+                  if matched[0]!=target:
+                      text=text.replace(matched[0],target,1)
+                      cell['source']=text
+                  gpu_hits+=1
+          if config_hits!=1 or gpu_hits!=1:
+              raise SystemExit(f'Patch mismatch config={config_hits} gpu={gpu_hits}')
+
+          target=root/'garden-tales-v20-s02.ipynb'
+          target.write_text(json.dumps(nb,ensure_ascii=False,indent=1)+'\n',encoding='utf-8')
+          if src!=target:
+              src.unlink()
+
+          mp=root/'kernel-metadata.json'
+          meta=json.loads(mp.read_text(encoding='utf-8'))
+          meta['id']='sita2ksitas/garden-tales-v20-h3-pv-s02'
+          meta['title']='Garden Tales v20 H3 PV S02'
+          meta['code_file']=target.name
+          ds=[x for x in (meta.get('dataset_sources') or []) if x]
+          if 'sita2ksitas/h3-pv-hangover' not in ds:
+              ds.append('sita2ksitas/h3-pv-hangover')
+          meta['dataset_sources']=ds
+          meta['enable_gpu']=True
+          meta['enable_internet']=True
+          mp.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+
+          print(json.dumps({
+              'target_kernel':meta['id'],
+              'input_dataset':'sita2ksitas/h3-pv-hangover',
+              'first_frame':'S02_FIRST_FRAME.HEIC',
+              'last_frame':'S02_LAST_FRAME.HEIC',
+              'seconds':8,
+              'width':768,
+              'height':1664,
+              'steps':20,
+              'seed':2026092501,
+              'expected_frames':192,
+              'timeout_minutes':660,
+              'multistream_shares':'0.85,1.15'
+          },ensure_ascii=False,indent=2))
+          PY
+
+      - name: Save and Run All
+        id: push
+        run: |
+          set -euo pipefail
+          kaggle kernels push -p .bridge/s02 | tee .bridge/push.log
+          python - <<'PY'
+          import os,re
+          s=open('.bridge/push.log',encoding='utf-8',errors='replace').read()
+          m=re.search(r'https://www\.kaggle\.com/(?:code/)?([^/\s]+)/([^\s]+)',s)
+          if not m: raise SystemExit('Could not parse actual Kaggle kernel URL')
+          actual=f'{m.group(1)}/{m.group(2)}'.rstrip('.,)')
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:
+              print('ACTUAL_KERNEL='+actual,file=f)
+          print('ACTUAL_KERNEL='+actual)
+          PY
+
+      - name: Confirm Kaggle accepted
+        id: status
+        run: |
+          set -euo pipefail
+          accepted=0
+          for i in $(seq 1 30); do
+            out="$(kaggle kernels status "$ACTUAL_KERNEL" 2>&1 || true)"
+            printf '%s\n' "$out" | tee .bridge/status.log
+            low="$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$low" == *running* || "$low" == *queued* || "$low" == *complete* ]]; then accepted=1; break; fi
+            if [[ "$low" == *error* || "$low" == *failed* ]]; then exit 1; fi
+            sleep 10
+          done
+          [ "$accepted" -eq 1 ]
+
+      - name: Write receipt
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+          STATUS_OUTCOME: ${{ steps.status.outcome }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json,os,hashlib
+          from datetime import datetime,timezone
+          prompt="""8-second ultra-detailed photoreal video. Adult woman in a hotel hallway, locked low floor-level camera, no cuts, no camera movement, no other people, no text.
+
+Use first-frame and last-frame guidance strictly. Preserve the same woman, the same low hallway perspective, the same black satin slip, the same dark sheer pantyhose, and the same overall exhausted drunken atmosphere. Prioritize body continuity, identity continuity, and smooth realistic motion. Background props and small objects are secondary and should remain visually unobtrusive; do not focus on, animate, or emphasize them.
+
+Start frame: She lies face-down on the polished hallway floor, seen from a very low angle behind her legs and feet. Her body is stretched along the corridor. Her face is mostly hidden by hair and angle, close to the wall. She looks drunk, heavy, and barely conscious.
+
+End frame: She has weakly dragged herself forward and slightly changed her upper-body angle. Her head is raised and turned more toward camera side, with more of her face visible. She still remains low to the ground, exhausted and unstable, as if she has spent her last bit of strength trying to move.
+
+Motion timing:
+0–2s: Almost still. Slow heavy breathing. Subtle rise and fall in her back and shoulders. Tiny involuntary movement in fingers or toes. Hair shifts slightly.
+2–4.5s: She begins to stir weakly. One forearm and elbow slowly press into the floor. Her shoulders and upper chest lift slightly. Her body weight drags forward a little with difficulty. The movement feels slow, heavy, and drunken, with no sudden energy.
+4.5–6.5s: She continues the weak forward drag. Her upper body shifts a little farther. Her head gradually turns and lifts, revealing more of her face. Hair falls aside naturally. Her posture remains low and unstable, with realistic body weight and friction against the floor.
+6.5–8s: She settles into the final position. Her strength fades. Her head remains turned more toward camera side, her body pauses, and only faint breathing remains. End in a stable hold matching the last frame.
+
+Visual priorities: photoreal skin and hair, realistic satin and pantyhose texture, realistic body weight, smooth slow motion, subtle floor friction, exhausted intoxicated behavior, stable anatomy, stable identity, and strong first-frame / last-frame continuity. De-emphasize exact prop continuity; small objects in the hallway are secondary and must not dominate the motion."""
+          payload={
+            'state':'submitted' if os.environ.get('PUSH_OUTCOME')=='success' and os.environ.get('STATUS_OUTCOME')=='success' else 'failed',
+            'shot':'S02',
+            'source_kernel':'sita2ksitas/garden-tales-v20-h3-pv-s01',
+            'target_kernel':'sita2ksitas/garden-tales-v20-h3-pv-s02',
+            'actual_kernel':os.environ.get('ACTUAL_KERNEL'),
+            'input_dataset':'sita2ksitas/h3-pv-hangover',
+            'first_frame':'S02_FIRST_FRAME.HEIC',
+            'last_frame':'S02_LAST_FRAME.HEIC',
+            'seconds':8,'width':768,'height':1664,'steps':20,'seed':2026092501,
+            'expected_frames':192,'timeout_minutes':660,'multistream_shares':'0.85,1.15',
+            'prompt_sha256':hashlib.sha256(prompt.encode()).hexdigest(),
+            'kaggle_status':open('.bridge/status.log',encoding='utf-8',errors='replace').read()[-2000:] if os.path.exists('.bridge/status.log') else None,
+            'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",
+            'updated_at':datetime.now(timezone.utc).isoformat()
+          }
+          with open('results/launch-s02.json','w',encoding='utf-8') as f:
+              json.dump(payload,f,ensure_ascii=False,indent=2);f.write('\n')
+          print(json.dumps(payload,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Commit receipt
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/launch-s02.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report S02 launch [skip ci]'
+          git pull --rebase origin main
+          git push
