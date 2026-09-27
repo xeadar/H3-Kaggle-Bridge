@@ -1,0 +1,33 @@
+{
+  "state": "complete",
+  "shot": "S02",
+  "kernel_version": "sita2ksitas/garden-tales-v20-h3-pv-s02/1",
+  "garden_dataset": "sita2ksitas/garden-tales-pv",
+  "run_id": "20260926_155511_02447f",
+  "filename": "H3_V10_00001_.mp4",
+  "bytes": 3307302,
+  "sha256": "6c1e4919954fea26920b8c0316ca48feb20c96d87a9261485511fa5d7fc8b641",
+  "artifact_name": "garden-tales-s02-archived",
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36288803553",
+  "updated_at": "2026-09-27T02:33:00.371863+00:00",
+  "located": {
+    "state": "located",
+    "shot": "S02",
+    "kernel_version": "sita2ksitas/garden-tales-v20-h3-pv-s02/1",
+    "source_path": "Garden_Tales_PV/20260926_155511_02447f/H3_V10_00001_.mp4",
+    "filename": "H3_V10_00001_.mp4",
+    "bytes": 3307302,
+    "sha256": "6c1e4919954fea26920b8c0316ca48feb20c96d87a9261485511fa5d7fc8b641",
+    "run_id": "20260926_155511_02447f",
+    "report_path": "Garden_Tales_PV/20260926_155511_02447f/report.json",
+    "report_status": "COMPLETE",
+    "video_generated": true,
+    "media": {
+      "width": 768,
+      "height": 1664,
+      "frames": 192,
+      "fps": "24",
+      "seconds": 8.0
+    }
+  }
+}
