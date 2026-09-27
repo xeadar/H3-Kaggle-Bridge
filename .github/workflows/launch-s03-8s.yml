@@ -52,25 +52,18 @@ jobs:
           src=nbs[0]
           nb=json.loads(src.read_text(encoding='utf-8'))
 
-          prompt="""How the reference pictures align with the target video — Picture 1 aligns with the 0.00-second mark of the target video; Picture 2 aligns with the 8.00-second mark of the target video.
-
-integrated_multimodal_description: [Shot 1] Live-action, photorealistic. The woman begins exactly from the position, scale, body orientation, and framing established by Picture 1. The shallow depth of field and softly blurred background in Picture 1 are preserved naturally at the beginning.
-
-Still visibly intoxicated and unsteady, she begins crawling slowly toward the location established by Picture 2.
-
-Her crawling is natural but clumsy from drunkenness. Her arms and legs work together to move her forward: she alternates her weight between her hands and forearms while her knees and feet make small, uneven pushes against the floor. Her hips, torso, and legs all participate naturally in the movement, with slightly delayed, unstable coordination caused by intoxication.
-
-Each crawling cycle produces clear forward displacement through the environment. Her pace remains slow and heavy, with uneven rhythm, small balance corrections, and occasional brief hesitation as she continues toward the destination.
-
-The camera follows behind her in a low rear Tracking Shot, moving smoothly at roughly the same pace and maintaining a consistent rear perspective and similar viewing distance as she crawls.
-
-Around the middle of the crawl, she lets out one brief natural fart. Her body gives a tiny involuntary pause and slight tension for a moment, then she continues crawling without making a dramatic reaction.
-
-As she gets closer, the spatial difference between her current position and Picture 2 steadily decreases. She continues crawling until her position, orientation, scale, body posture, spatial relationship, and framing naturally converge with Picture 2 at the end of the shot.
-
-overall_soundscape: Soft hand and knee contact against the floor, subtle clothing movement, slightly uneven breathing, one brief natural fart during the middle of the crawl, and quiet environmental ambience synchronized with her movement.
-
-non_diegetic_music: N/A"""
+          prompt=(
+              'How the reference pictures align with the target video — Picture 1 aligns with the 0.00-second mark of the target video; Picture 2 aligns with the 8.00-second mark of the target video.\n\n'
+              'integrated_multimodal_description: [Shot 1] Live-action, photorealistic. The woman begins exactly from the position, scale, body orientation, and framing established by Picture 1. The shallow depth of field and softly blurred background in Picture 1 are preserved naturally at the beginning.\n\n'
+              'Still visibly intoxicated and unsteady, she begins crawling slowly toward the location established by Picture 2.\n\n'
+              'Her crawling is natural but clumsy from drunkenness. Her arms and legs work together to move her forward: she alternates her weight between her hands and forearms while her knees and feet make small, uneven pushes against the floor. Her hips, torso, and legs all participate naturally in the movement, with slightly delayed, unstable coordination caused by intoxication.\n\n'
+              'Each crawling cycle produces clear forward displacement through the environment. Her pace remains slow and heavy, with uneven rhythm, small balance corrections, and occasional brief hesitation as she continues toward the destination.\n\n'
+              'The camera follows behind her in a low rear Tracking Shot, moving smoothly at roughly the same pace and maintaining a consistent rear perspective and similar viewing distance as she crawls.\n\n'
+              'Around the middle of the crawl, she lets out one brief natural fart. Her body gives a tiny involuntary pause and slight tension for a moment, then she continues crawling without making a dramatic reaction.\n\n'
+              'As she gets closer, the spatial difference between her current position and Picture 2 steadily decreases. She continues crawling until her position, orientation, scale, body posture, spatial relationship, and framing naturally converge with Picture 2 at the end of the shot.\n\n'
+              'overall_soundscape: Soft hand and knee contact against the floor, subtle clothing movement, slightly uneven breathing, one brief natural fart during the middle of the crawl, and quiet environmental ambience synchronized with her movement.\n\n'
+              'non_diegetic_music: N/A'
+          )
           (root/'prompt.sha256').write_text(hashlib.sha256(prompt.encode()).hexdigest()+'\n',encoding='utf-8')
 
           config=("# S03 production: 768x1664 / 8 s / 20 steps / FL2VA first+last.\n"
