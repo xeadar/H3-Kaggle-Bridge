@@ -1,0 +1,19 @@
+{
+  "state": "complete",
+  "request_id": "replace-s03-assets-20260927",
+  "dataset": "sita2ksitas/h3-pv-hangover",
+  "assets": [
+    {
+      "name": "S03_FIRST_FRAME.HEIC",
+      "bytes": 2268090,
+      "sha256": "72a65991aadc30ca9ac925a41dbbd997ebf6d87989a06a29094f1243ae2a4bc4"
+    },
+    {
+      "name": "S03_LAST_FRAME.HEIC",
+      "bytes": 2776409,
+      "sha256": "13ce9e23dabd9c62e2fa55edd73bb04de19a1a5ba1fd8ed4acc72111fe2c5ae4"
+    }
+  ],
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36294682875",
+  "updated_at": "2026-09-27T04:34:39.944443+00:00"
+}
