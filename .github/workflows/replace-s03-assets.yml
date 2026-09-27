@@ -1,0 +1,185 @@
+name: H3 Bridge - Replace S03 Assets
+
+on:
+  push:
+    paths:
+      - control/replace-s03-assets.enc.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: h3-bridge-replace-s03-assets
+  cancel-in-progress: false
+
+jobs:
+  replace-s03:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      DATASET: sita2ksitas/h3-pv-hangover
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bridge tools
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4' kagglehub cryptography
+
+      - name: Decrypt replacement request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .bridge
+          python - <<'PY'
+          import os,json,base64,hashlib
+          from pathlib import Path
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey,X25519PublicKey
+          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+          from cryptography.hazmat.primitives import hashes
+          from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+          enc=json.load(open('control/replace-s03-assets.enc.json',encoding='utf-8'))
+          token=os.environ['KAGGLE_API_TOKEN'].encode()
+          seed=hashlib.sha256(b'H3-BRIDGE-TRANSPORT-v1\0'+token).digest()
+          priv=X25519PrivateKey.from_private_bytes(seed)
+          eph=X25519PublicKey.from_public_bytes(base64.b64decode(enc['ephemeral_public_key_b64']))
+          aad=b'H3-BRIDGE-CONTROL-v1'
+          key=HKDF(algorithm=hashes.SHA256(),length=32,salt=None,info=aad).derive(priv.exchange(eph))
+          plain=ChaCha20Poly1305(key).decrypt(base64.b64decode(enc['nonce_b64']),base64.b64decode(enc['ciphertext_b64']),aad)
+          if hashlib.sha256(plain).hexdigest()!=enc['request_sha256']:
+              raise SystemExit('request SHA mismatch')
+          req=json.loads(plain)
+          if req.get('dataset')!=os.environ['DATASET']:
+              raise SystemExit('dataset mismatch')
+          names=[a.get('name') for a in req.get('assets',[])]
+          if names!=['S03_FIRST_FRAME.HEIC','S03_LAST_FRAME.HEIC']:
+              raise SystemExit('unexpected asset names/order: '+repr(names))
+          Path('.bridge/request.json').write_text(json.dumps(req,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps({'request_id':req.get('request_id'),'dataset':req.get('dataset'),'assets':[{'name':a['name'],'bytes':a['bytes']} for a in req['assets']]},ensure_ascii=False,indent=2))
+          PY
+
+      - name: Download current Kaggle asset snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .bridge/dataset .bridge/verify
+          mkdir -p .bridge/dataset .bridge/verify
+          kaggle datasets download "$DATASET" -p .bridge/dataset --unzip -o
+
+      - name: Overlay new S03 assets from Dropbox relay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,pathlib,urllib.request
+          req=json.load(open('.bridge/request.json',encoding='utf-8'))
+          root=pathlib.Path('.bridge/dataset')
+          records=[]
+          for a in req['assets']:
+              p=root/a['name']
+              with urllib.request.urlopen(a['url'],timeout=180) as r, p.open('wb') as f:
+                  while True:
+                      b=r.read(1024*1024)
+                      if not b: break
+                      f.write(b)
+              size=p.stat().st_size
+              if size!=int(a['bytes']):
+                  raise SystemExit(f"size mismatch {a['name']}: {size} != {a['bytes']}")
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+              sha=h.hexdigest()
+              records.append({'name':a['name'],'bytes':size,'sha256':sha})
+              print('SOURCE_OK',a['name'],size,sha)
+          pathlib.Path('.bridge/source-hashes.json').write_text(json.dumps(records,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          # Refresh manifest while preserving other assets in the snapshot.
+          manifest_path=root/'asset_manifest.json'
+          try: manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+          except Exception: manifest={'schema':'h3-series-assets-v1','series':'H3_妹が二日酔い_PV','assets':[]}
+          by={x.get('name'):x for x in manifest.get('assets',[]) if isinstance(x,dict) and x.get('name')}
+          for r in records: by[r['name']]=r
+          manifest['schema']='h3-series-assets-v1'; manifest['series']='H3_妹が二日酔い_PV'; manifest['status']='ready'; manifest['assets']=[by[k] for k in sorted(by)]
+          manifest_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+
+      - name: Publish replacement Dataset version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os,time,kagglehub
+          last=None
+          for i in range(12):
+              try:
+                  kagglehub.dataset_upload(os.environ['DATASET'],'.bridge/dataset',version_notes='Replace S03 first/last HEIC assets from Dropbox')
+                  print('DATASET_UPLOAD_OK',os.environ['DATASET'])
+                  break
+              except Exception as e:
+                  last=e; print('attempt',i+1,'failed',repr(e)); time.sleep(10)
+          else: raise last
+          PY
+
+      - name: Verify exact replacement payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=0
+          for attempt in $(seq 1 36); do
+            rm -rf .bridge/verify && mkdir -p .bridge/verify
+            if kaggle datasets download "$DATASET" -p .bridge/verify --unzip -o >/tmp/kaggle-s03-verify.log 2>&1; then
+              if [ -f .bridge/verify/S03_FIRST_FRAME.HEIC ] && [ -f .bridge/verify/S03_LAST_FRAME.HEIC ]; then ok=1; break; fi
+            fi
+            sleep 5
+          done
+          [ "$ok" -eq 1 ] || { cat /tmp/kaggle-s03-verify.log >&2 || true; exit 1; }
+          python - <<'PY'
+          import hashlib,json,pathlib
+          expected={x['name']:x for x in json.load(open('.bridge/source-hashes.json',encoding='utf-8'))}
+          root=pathlib.Path('.bridge/verify')
+          verified=[]
+          for name,e in expected.items():
+              p=root/name
+              h=hashlib.sha256()
+              with p.open('rb') as f:
+                  for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
+              got={'name':name,'bytes':p.stat().st_size,'sha256':h.hexdigest()}
+              if got['bytes']!=e['bytes'] or got['sha256']!=e['sha256']:
+                  raise SystemExit('verify mismatch '+name)
+              verified.append(got); print('VERIFY_OK',name,got['bytes'],got['sha256'])
+          pathlib.Path('.bridge/verified.json').write_text(json.dumps(verified,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+
+      - name: Write bridge result
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          import json,os
+          from datetime import datetime,timezone
+          try:req=json.load(open('.bridge/request.json',encoding='utf-8'))
+          except Exception:req={}
+          try:assets=json.load(open('.bridge/verified.json',encoding='utf-8')); state='complete'
+          except Exception:
+              try: assets=json.load(open('.bridge/source-hashes.json',encoding='utf-8'))
+              except Exception: assets=[]
+              state='failed'
+          payload={'state':state,'request_id':req.get('request_id'),'dataset':os.environ.get('DATASET'),'assets':assets,'github_run':f"https://github.com/{os.environ.get('REPOSITORY')}/actions/runs/{os.environ.get('RUN_ID')}",'updated_at':datetime.now(timezone.utc).isoformat()}
+          with open('results/replace-s03-assets.json','w',encoding='utf-8') as f: json.dump(payload,f,ensure_ascii=False,indent=2);f.write('\n')
+          print(json.dumps(payload,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Commit result
+        if: always()
+        run: |
+          git config user.name 'h3-kaggle-bridge[bot]'
+          git config user.email 'h3-kaggle-bridge[bot]@users.noreply.github.com'
+          git add results/replace-s03-assets.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Report S03 asset replacement [skip ci]'
+          git pull --rebase origin main
+          git push
