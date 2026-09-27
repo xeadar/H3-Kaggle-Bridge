@@ -1,0 +1,22 @@
+{
+  "state": "submitted",
+  "shot": "S03",
+  "source_kernel": "sita2ksitas/garden-tales-v20-h3-pv-s02",
+  "target_kernel": "sita2ksitas/garden-tales-v20-h3-pv-s03",
+  "actual_kernel": "sita2ksitas/garden-tales-v20-h3-pv-s03",
+  "input_dataset": "sita2ksitas/h3-pv-hangover",
+  "first_frame": "S03_FIRST_FRAME.HEIC",
+  "last_frame": "S03_LAST_FRAME.HEIC",
+  "seconds": 8,
+  "width": 768,
+  "height": 1664,
+  "steps": 20,
+  "seed": 2026092501,
+  "expected_frames": 192,
+  "timeout_minutes": 660,
+  "multistream_shares": "0.85,1.15",
+  "prompt_sha256": "b59d3e3ab40db0a2fc1906ccbc7c3322b3677ef3dd60d984a635e0e696776a21",
+  "kaggle_status": "sita2ksitas/garden-tales-v20-h3-pv-s03 has status \"KernelWorkerStatus.RUNNING\"\n",
+  "github_run": "https://github.com/xeadar/H3-Kaggle-Bridge/actions/runs/36296619177",
+  "updated_at": "2026-09-27T05:14:34.420669+00:00"
+}
