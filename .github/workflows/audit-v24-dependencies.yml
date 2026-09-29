@@ -58,6 +58,38 @@ jobs:
            print('PULLED',json.dumps({'ref':ref,'rc':result['returncode'],'status':obj['status']['stdout'],
             'id':meta.get('id'),'title':meta.get('title'),'dataset_sources':meta.get('dataset_sources'),'kernel_sources':meta.get('kernel_sources')},ensure_ascii=False))
            if result['returncode']:print('PULL_ERROR',result['stderr'][-2000:])
+          from kaggle.api.kaggle_api_extended import ApiGetKernelRequest
+          def serial(x):
+           if x is None or isinstance(x,(str,int,float,bool)):return x
+           if isinstance(x,list):return [serial(y) for y in x]
+           if isinstance(x,dict):return {str(k):serial(v) for k,v in x.items()}
+           if hasattr(x,'to_dict'):return x.to_dict()
+           if hasattr(x,'__dict__'):return {k:serial(v) for k,v in vars(x).items() if not k.startswith('_')}
+           return str(x)
+          data['parse_kernel_string_source']=inspect.getsource(api.parse_kernel_string)
+          data['dataset_details']={}
+          for ds in ['sita2ksitas/h3-comfyui-offline-software','sita2ksitas/minimax-h3-comfyui-models']:
+           pages=[];token=None
+           for page in range(30):
+            response=api.dataset_list_files(ds,page_token=token,page_size=100)
+            pages.append(serial(response))
+            token=getattr(response,'next_page_token',None)
+            if not token:break
+           data['dataset_details'][ds]=pages
+           print('DATASET_PAGES',ds,len(pages))
+          data['versions']={}
+          for ref in refs[:12]:
+           for version in [None,24]:
+            req=ApiGetKernelRequest();req.user_name=ref.split('/')[0];req.kernel_slug=ref.split('/')[1]+('/24' if version else '')
+            try:
+             with api.build_kaggle_client() as client:res=client.kernels.kernels_api_client.get_kernel(req)
+             md=serial(res.metadata)
+             data['versions'][str(version)]={'metadata':md,'source':res.blob.source}
+             print('VERSION_METADATA',version,json.dumps(md,default=str)[:7000])
+            except Exception as e:
+             data['versions'][str(version)]={'error':str(e)}
+             print('VERSION_ERROR',version,str(e)[:800])
+          
           raw=json.dumps(data,ensure_ascii=False).encode()
           pub=serialization.load_pem_public_key("-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu7A5M0e0f/S5fFbq5jGk\nlxSaCzboFL8Lkj0fwBh6Emw0imFVhgYQKp+dC2j+A2/zbSgk3bngJF8IeAAMwbqP\nkqjFmZpea3oVI+niQQPU34TSS7pmm645r60KKxNJTMdv2d9Odyt85uAChVDXwi+p\ntTis8RDARlu/0KsSeduvj7KPk48DdYmZAS3jRLTHn8JKB4LEcFvC6GbpHst6KPwl\n2znhYTLqiyKAd7qUHBvxRsiPhQZHjJxCXS2D/gMVYEtVfMPns7NlgzpS9jZZGxgj\npLKO+8ho08Jo+91l5A76KXJ7O8skF4017B4ZMA3uZWjqRXgUJ8d5xKtMi8Rv/uS1\nXwIDAQAB\n-----END PUBLIC KEY-----".encode())
           key=AESGCM.generate_key(bit_length=256);nonce=secrets.token_bytes(12)
