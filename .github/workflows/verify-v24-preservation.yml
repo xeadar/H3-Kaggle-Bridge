@@ -1,0 +1,60 @@
+name: H3 V24 Verify Preserved Dataset
+on:
+  push:
+    paths:
+      - .github/workflows/verify-v24-preservation.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.13'
+      - run: python -m pip install --quiet 'kaggle==2.2.4' kagglehub
+      - name: Read actual Dataset version 2 and verify every preserved byte
+        run: |
+          python - <<'PY'
+          import hashlib, json, shutil, subprocess, tempfile, zipfile
+          from pathlib import Path
+          import kagglehub
+          from kaggle.api.kaggle_api_extended import KaggleApi
+          ref='sita2ksitas/h3-v24-runtime-dependencies'
+          root=Path(kagglehub.dataset_download(ref+'/versions/2',force_download=True))
+          manifest=json.loads((root/'MANIFEST.json').read_text())
+          assert manifest['source_version']==24
+          assert any(x['path']=='custom_nodes/multistream_git_metadata.zip.bin' for x in manifest['files'])
+          for f in manifest['files']:
+              p=root/f['path']
+              assert p.is_file(),f['path']+' missing'
+              assert p.stat().st_size==f['bytes'],f['path']+' size mismatch'
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==f['sha256'],f['path']+' hash mismatch'
+          with tempfile.TemporaryDirectory(prefix='h3_git_check_') as d:
+              dest=Path(d)/'node';shutil.copytree(root/'custom_nodes/ComfyUI-H3-MultiStream',dest)
+              with zipfile.ZipFile(root/'custom_nodes/multistream_git_metadata.zip.bin') as z:z.extractall(dest)
+              actual=subprocess.check_output(['git','-C',str(dest),'rev-parse','HEAD'],text=True).strip()
+              assert actual=='4e4381ff2cdb061a4cd0065af5b9c3679ded379a'
+              expected=(dest/'multistream/split.py').read_text()
+              assert subprocess.check_output(['git','-C',str(dest),'show',actual+':multistream/split.py'],text=True)==expected
+          api=KaggleApi();api.authenticate()
+          view=api.dataset_view(ref).to_dict()
+          visibility={k:v for k,v in view.items() if any(s in k.lower() for s in ('private','public','ref','version','title'))}
+          closure=json.loads((root/'closure/RESULT.json').read_text())
+          lock=json.loads((root/'VERSION_LOCK.json').read_text())
+          heic=(root/'heic_wheels/requirements-heic.lock.txt').read_text().strip().splitlines()
+          receipt={'dataset':ref,'version':2,'source_kernel_version':24,'file_count_including_manifest':len(manifest['files'])+1,
+                   'bytes_excluding_manifest':manifest['total_bytes'],'sha256_readback':'PASS','restored_git_metadata':'PASS',
+                   'visibility':visibility,'closure':closure,'version_lock':lock,'heic_versions':heic,'gpu_started':False}
+          Path('preservation-receipt.json').write_text(json.dumps(receipt,indent=2))
+          print('DATASET_READBACK_VERIFIED',json.dumps(receipt))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: h3-v24-final-readback-receipt
+          path: preservation-receipt.json
+          retention-days: 90
