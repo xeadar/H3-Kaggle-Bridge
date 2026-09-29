@@ -1,6 +1,7 @@
 """Preserve V24 runtime dependencies only. Never launches or edits a Kaggle kernel."""
 import ast, hashlib, json, os, shutil, subprocess, sys, time, zipfile
 from pathlib import Path
+from closure_audit import audit as audit_closure
 import kagglehub
 from kaggle.api.kaggle_api_extended import KaggleApi, ApiGetKernelRequest
 
@@ -84,13 +85,30 @@ with zipfile.ZipFile(git_zip) as z:z.extractall(probe)
 assert run(["git","-C",probe,"rev-parse","HEAD"]).strip()==B_COMMIT
 split=run(["git","-C",probe,"show",B_COMMIT+":multistream/split.py"])
 assert split==(node_dir/"multistream/split.py").read_text()
-# Existing large Datasets stay in place. Only copy their tiny provenance files.
+# Existing large Datasets stay in place. Inspect the software once, but do not duplicate it.
+print('DOWNLOADING_EXISTING_SOFTWARE_FOR_CLOSURE_AUDIT',flush=True)
+software_dataset=Path(kagglehub.dataset_download('sita2ksitas/h3-comfyui-offline-software/versions/1'))
+software=software_dataset/'software'
+assert (software/'ComfyUI/main.py').is_file()
+print('EXISTING_SOFTWARE_READY',flush=True)
 for ref,path,out in [
  ("sita2ksitas/h3-comfyui-offline-software/versions/1","software/build_info.json","existing/build_info.json"),
  ("sita2ksitas/h3-comfyui-offline-software/versions/1","software/requirements.lock.txt","existing/requirements.lock.txt"),
  ("sita2ksitas/minimax-h3-comfyui-models/versions/2","model_manifest.json","existing/model_manifest.json")]:
     p=Path(kagglehub.dataset_download(ref,path=path))
     target=root/out;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(p,target)
+closure=audit_closure(software,root,node_dir,engine,save,sha)
+save('VERSION_LOCK.json',{
+ 'source_kernel_version':24,'source_sha256':EXPECTED_SOURCE_SHA,
+ 'comfy_build':json.loads((root/'existing/build_info.json').read_text()),
+ 'multistream_commit':B_COMMIT,
+ 'python_notebook_metadata':nb.get('metadata',{}).get('language_info',{}).get('version'),
+ 'kaggle_docker_image':meta.get('dockerImage'),
+ 'tested_cpu_environment':closure.get('tested_environment'),
+ 'wheel_lock':'closure/wheels.lock.json','hash_enforced_install_lock':'closure/requirements-hashed.lock.txt',
+ 'software_tree_sha256_inventory':'closure/software_files_sha256.json',
+ 'platform_boundary':'Kaggle host NVIDIA driver is not part of a Dataset; GPU compatibility must be checked on rebuild.',
+ 'baseline_status':'V24 source preservation; fresh GPU inference acceptance is not performed.'})
 # Original V24 did not pin pillow-heif. Resolve now, save wheels and lock exact versions.
 wheel_dir=root/"heic_wheels";wheel_dir.mkdir()
 run([sys.executable,"-m","pip","download","--only-binary=:all:","--dest",wheel_dir,"pillow-heif","pillow==12.3.0"],timeout=300)
@@ -174,6 +192,25 @@ The former archive cell was excluded from the clean snapshot, together with old 
 
 All third-party software remains under its included upstream license. No model license is changed.
 ''')
+save('closure/README.md','''# Offline closure and version lock
+
+VERSION_LOCK.json records ComfyUI build provenance, MultiStream commit, Python metadata,
+Kaggle base-image digest, Torch/CUDA probe results and links to hash-locked wheels.
+The full existing software tree has been read and hashed, without duplicating its 3.79 GB here.
+The fresh CPU environment uses only these local wheels: --no-index --require-hashes.
+CPU ComfyUI startup and V24 node-schema/frontend checks are attempted in a network namespace
+without external interfaces. RESULT.json records the actual result, not an inference claim.
+
+network_references_static.json includes optional APIs and unrelated node download paths;
+their mere presence does not prove that the V24 workflow calls them.
+loader_sources.json, when produced, captures the H3/Qwen loader code for review.
+Weights are not loaded and CUDA kernels are not tested during this CPU-only preservation.
+The exact NVIDIA host driver cannot be vendored in a Dataset.
+
+Future integration must preload the supplied MultiStream source, install HEIC from its local
+wheels, mount all model inputs ahead of time, disable online fallback and fail clearly when
+an input is missing. The exact preserved V24 engine itself has NOT been silently modified.
+''')
 files=[{"path":str(p.relative_to(root)),"bytes":p.stat().st_size,"sha256":sha(p)} for p in sorted(root.rglob("*")) if p.is_file()]
 manifest={"schema":1,"source_kernel":KERNEL,"source_version":24,"source_sha256":EXPECTED_SOURCE_SHA,"file_count":len(files),"total_bytes":sum(x["bytes"] for x in files),"files":files}
 save("MANIFEST.json",manifest)
@@ -201,6 +238,7 @@ vis=json.loads((info_dir/"dataset-metadata.json").read_text())
 receipt={"dataset":DEST,"url":"https://www.kaggle.com/datasets/"+DEST,"source_version":24,
  "old_notebook_dependencies":0,"file_count":len(files)+1,"payload_bytes":manifest["total_bytes"],
  "sha256_readback":"PASS","gpu_started":False,"new_notebook_created":False,
+ "closure":closure,
  "dataset_metadata":{k:vis.get(k) for k in ("id","title","isPrivate","is_private")}}
 Path("preservation-receipt.json").write_text(json.dumps(receipt,indent=2))
 print("PRESERVATION_COMPLETE",json.dumps(receipt))
