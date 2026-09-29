@@ -212,7 +212,7 @@ Future integration must preload the supplied MultiStream source, install HEIC fr
 wheels, mount all model inputs ahead of time, disable online fallback and fail clearly when
 an input is missing. The exact preserved V24 engine itself has NOT been silently modified.
 ''')
-files=[{"path":str(p.relative_to(root)),"bytes":p.stat().st_size,"sha256":sha(p)} for p in sorted(root.rglob("*")) if p.is_file()]
+files=[{"path":str(p.relative_to(root)),"bytes":p.stat().st_size,"sha256":sha(p)} for p in sorted(root.rglob("*")) if p.is_file() and '__pycache__' not in p.parts and p.suffix!='.pyc']
 manifest={"schema":1,"source_kernel":KERNEL,"source_version":24,"source_sha256":EXPECTED_SOURCE_SHA,"file_count":len(files),"total_bytes":sum(x["bytes"] for x in files),"files":files}
 save("MANIFEST.json",manifest)
 print("PACKAGE_READY",json.dumps({"files":len(files)+1,"bytes":sum(p.stat().st_size for p in root.rglob("*") if p.is_file())}))
