@@ -1,0 +1,42 @@
+name: H3 V24 Preserve Runtime Dependencies
+on:
+  push:
+    paths:
+      - .github/workflows/preserve-v24-runtime.yml
+      - .github/scripts/preserve_v24.py
+      - .github/scripts/closure_audit.py
+      - .github/scripts/offline_startup_probe.py
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: h3-v24-preservation
+  cancel-in-progress: false
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install preservation tooling
+        run: python -m pip install --quiet 'kaggle==2.2.4' kagglehub
+      - name: Preserve software and verify offline closure
+        run: python .github/scripts/preserve_v24.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: h3-v24-preservation-receipt
+          path: |
+            preservation-receipt.json
+            .preserve/payload/closure
+            .preserve/payload/VERSION_LOCK.json
+            .preserve/payload/existing/build_info.json
+            .preserve/payload/existing/requirements.lock.txt
+          retention-days: 30
+          if-no-files-found: warn
