@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12.13'
       - run: python -m pip install --quiet 'kaggle==2.2.4' kagglehub
-      - name: Finalize manifest without disposable bytecode and verify Dataset version 3
+      - name: Verify fixed Dataset version 3 and account visibility
         run: |
           python - <<'PY'
           import hashlib, json, shutil, subprocess, tempfile, zipfile
@@ -25,15 +25,11 @@ jobs:
           import kagglehub
           from kaggle.api.kaggle_api_extended import KaggleApi
           ref='sita2ksitas/h3-v24-runtime-dependencies'
-          root=Path(kagglehub.dataset_download(ref+'/versions/2',force_download=True))
+          root=Path(kagglehub.dataset_download(ref+'/versions/3',force_download=True))
           manifest=json.loads((root/'MANIFEST.json').read_text())
           assert manifest['source_version']==24
           assert any(x['path']=='custom_nodes/multistream_git_metadata.zip.bin' for x in manifest['files'])
-          omitted=[f for f in manifest['files'] if '__pycache__' in Path(f['path']).parts or f['path'].endswith('.pyc')]
-          manifest['files']=[f for f in manifest['files'] if f not in omitted]
-          manifest['excluded_generated_bytecode']=[f['path'] for f in omitted]
-          manifest['file_count']=len(manifest['files'])
-          manifest['total_bytes']=sum(f['bytes'] for f in manifest['files'])
+          assert not any('__pycache__' in Path(f['path']).parts for f in manifest['files'])
           for f in manifest['files']:
               p=root/f['path']
               assert p.is_file(),f['path']+' missing'
@@ -46,33 +42,10 @@ jobs:
               assert actual=='4e4381ff2cdb061a4cd0065af5b9c3679ded379a'
               expected=(dest/'multistream/split.py').read_text()
               assert subprocess.check_output(['git','-C',str(dest),'show',actual+':multistream/split.py'],text=True)==expected
-          # Bytecode is an interpreter cache, excluded automatically by KaggleHub.
-          # Stage only declared source artifacts; never mutate either large source Dataset.
-          with tempfile.TemporaryDirectory(prefix='h3_manifest_final_') as d:
-              staging=Path(d)
-              for f in manifest['files']:
-                  target=staging/f['path'];target.parent.mkdir(parents=True,exist_ok=True)
-                  shutil.copy2(root/f['path'],target)
-              (staging/'MANIFEST.json').write_text(json.dumps(manifest,indent=2))
-              kagglehub.dataset_upload(ref,str(staging),version_notes='Finalize complete dependency lock and source manifest; exclude disposable Python bytecode')
-          import time
-          verified=None
-          for attempt in range(12):
-              try:
-                  candidate=Path(kagglehub.dataset_download(ref+'/versions/3',force_download=True))
-                  if json.loads((candidate/'MANIFEST.json').read_text())==manifest:
-                      verified=candidate;break
-              except Exception as exc:
-                  if attempt==11:raise
-              time.sleep(10)
-          assert verified is not None,'New Dataset version is not ready'
-          for f in manifest['files']:
-              p=verified/f['path']
-              assert p.is_file() and p.stat().st_size==f['bytes'] and hashlib.sha256(p.read_bytes()).hexdigest()==f['sha256'],f['path']
-          root=verified
           api=KaggleApi();api.authenticate()
-          view=api.dataset_view(ref).to_dict()
-          visibility={k:v for k,v in view.items() if any(s in k.lower() for s in ('private','public','ref','version','title'))}
+          views=[x.to_dict() for x in api.dataset_list(mine=True)]
+          visibility=[{k:v for k,v in x.items() if any(s in k.lower() for s in ('private','public','ref','version','title'))} for x in views]
+          print('DATASET_METADATA_KEYS',sorted(views[0].keys()) if views else [])
           closure=json.loads((root/'closure/RESULT.json').read_text())
           lock=json.loads((root/'VERSION_LOCK.json').read_text())
           heic=(root/'heic_wheels/requirements-heic.lock.txt').read_text().strip().splitlines()
