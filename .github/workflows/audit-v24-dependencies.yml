@@ -1,0 +1,75 @@
+name: H3 V24 Dependency Audit
+on:
+  push:
+    paths:
+      - .github/workflows/audit-v24-dependencies.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install official API client
+        run: python -m pip install --quiet 'kaggle==2.2.4' cryptography
+      - name: Read-only dependency inventory - no kernel push or GPU launch
+        run: |
+          python - <<'PY'
+          import os,json,csv,io,subprocess,inspect,base64,secrets,hashlib
+          from pathlib import Path
+          from cryptography.hazmat.primitives import serialization,hashes
+          from cryptography.hazmat.primitives.asymmetric import padding
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from kaggle.api.kaggle_api_extended import KaggleApi
+          root=Path('.audit'); root.mkdir(exist_ok=True)
+          def cli(*args):
+           r=subprocess.run(['kaggle',*args],capture_output=True,text=True,timeout=150)
+           return {'returncode':r.returncode,'stdout':r.stdout,'stderr':r.stderr}
+          data={'kernels':cli('kernels','list','--mine','--page-size','100','--csv'),
+                'datasets':cli('datasets','list','--mine','--page-size','100','--csv'),'pulls':{}}
+          print('KERNEL_INVENTORY',data['kernels']['stdout'][:18000])
+          print('DATASET_INVENTORY',data['datasets']['stdout'][:18000])
+          if data['kernels']['returncode']:
+           print('LIST_ERROR',data['kernels']['stderr'][-3000:])
+          api=KaggleApi();api.authenticate()
+          for name in ['kernels_pull','kernels_status','kernels_list','kernels_output','kernels_files','dataset_list_files','dataset_create_new','dataset_create_version']:
+           if hasattr(api,name):
+            data['api_'+name]=inspect.getsource(getattr(api,name))
+            print('API',name,str(inspect.signature(getattr(api,name))))
+          refs=[]
+          for row in csv.DictReader(io.StringIO(data['kernels']['stdout'])):
+           ref=row.get('ref','')
+           if ref.startswith('sita2ksitas/') and any(x in (ref+' '+row.get('title','')).lower() for x in ['garden','h3','flow']):refs.append(ref)
+          for ref in refs[:12]:
+           folder=root/ref.split('/')[1];folder.mkdir(exist_ok=True)
+           result=cli('kernels','pull',ref,'-p',str(folder),'-m')
+           obj={'pull':result,'status':cli('kernels','status',ref),'files':{}}
+           for p in folder.iterdir():
+            if p.is_file():obj['files'][p.name]=p.read_text(errors='replace')
+           data['pulls'][ref]=obj
+           meta=json.loads(obj['files'].get('kernel-metadata.json','{}'))
+           print('PULLED',json.dumps({'ref':ref,'rc':result['returncode'],'status':obj['status']['stdout'],
+            'id':meta.get('id'),'title':meta.get('title'),'dataset_sources':meta.get('dataset_sources'),'kernel_sources':meta.get('kernel_sources')},ensure_ascii=False))
+           if result['returncode']:print('PULL_ERROR',result['stderr'][-2000:])
+          raw=json.dumps(data,ensure_ascii=False).encode()
+          pub=serialization.load_pem_public_key("-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu7A5M0e0f/S5fFbq5jGk\nlxSaCzboFL8Lkj0fwBh6Emw0imFVhgYQKp+dC2j+A2/zbSgk3bngJF8IeAAMwbqP\nkqjFmZpea3oVI+niQQPU34TSS7pmm645r60KKxNJTMdv2d9Odyt85uAChVDXwi+p\ntTis8RDARlu/0KsSeduvj7KPk48DdYmZAS3jRLTHn8JKB4LEcFvC6GbpHst6KPwl\n2znhYTLqiyKAd7qUHBvxRsiPhQZHjJxCXS2D/gMVYEtVfMPns7NlgzpS9jZZGxgj\npLKO+8ho08Jo+91l5A76KXJ7O8skF4017B4ZMA3uZWjqRXgUJ8d5xKtMi8Rv/uS1\nXwIDAQAB\n-----END PUBLIC KEY-----".encode())
+          key=AESGCM.generate_key(bit_length=256);nonce=secrets.token_bytes(12)
+          blob={'key':base64.b64encode(pub.encrypt(key,padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))).decode(),
+          'nonce':base64.b64encode(nonce).decode(),'ciphertext':base64.b64encode(AESGCM(key).encrypt(nonce,raw,b'h3-v24-audit')).decode()}
+          Path('h3-v24-audit.enc.json').write_text(json.dumps(blob))
+          print('ENCRYPTED_AUDIT_SAVED',len(raw),'bytes; notebooks',len(data['pulls']))
+          
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: h3-v24-dependency-audit-encrypted
+          path: h3-v24-audit.enc.json
+          retention-days: 7
+          if-no-files-found: error
