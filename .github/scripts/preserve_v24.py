@@ -78,7 +78,7 @@ save("custom_nodes/MULTISTREAM_COMMIT.txt",B_COMMIT+"\n")
 git_zip=root/"custom_nodes/multistream_git_metadata.zip"
 with zipfile.ZipFile(git_zip,"w",zipfile.ZIP_DEFLATED) as z:
     for p in sorted((repo/".git").rglob("*")):
-        if p.is_file(): z.write(p,p.relative_to(repo))
+        z.write(p,p.relative_to(repo))
 # Check the archived git metadata really satisfies V24's git checkout/show calls offline.
 probe=Path(".preserve/git_restore_check");shutil.copytree(node_dir,probe)
 with zipfile.ZipFile(git_zip) as z:z.extractall(probe)
