@@ -222,7 +222,7 @@ downloaded=None
 for attempt in range(8):
     try:
         downloaded=Path(kagglehub.dataset_download(DEST,force_download=True))
-        if (downloaded/"MANIFEST.json").is_file():break
+        if (downloaded/"MANIFEST.json").is_file() and json.loads((downloaded/"MANIFEST.json").read_text())==manifest:break
     except Exception:
         if attempt==7:raise
     time.sleep(10)
