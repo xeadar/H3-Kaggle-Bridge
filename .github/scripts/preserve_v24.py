@@ -75,7 +75,7 @@ assert run(["git","-C",repo,"rev-parse","HEAD"]).strip()==B_COMMIT
 node_dir=root/"custom_nodes/ComfyUI-H3-MultiStream"
 shutil.copytree(repo,node_dir,ignore=shutil.ignore_patterns(".git"))
 save("custom_nodes/MULTISTREAM_COMMIT.txt",B_COMMIT+"\n")
-git_zip=root/"custom_nodes/multistream_git_metadata.zip"
+git_zip=root/"custom_nodes/multistream_git_metadata.zip.bin"
 with zipfile.ZipFile(git_zip,"w",zipfile.ZIP_DEFLATED) as z:
     for p in sorted((repo/".git").rglob("*")):
         z.write(p,p.relative_to(repo))
@@ -168,7 +168,8 @@ The Version 4 line still printed in prepare mode is stale text, not a live depen
 - Existing package/model manifests and all filenames/sizes.
 
 The upstream MultiStream source is fully expanded in custom_nodes/ComfyUI-H3-MultiStream.
-The small separate multistream_git_metadata.zip restores its .git directory for V24's git checkout/show operations.
+The small separate multistream_git_metadata.zip.bin restores its .git directory for V24's git checkout/show operations.
+The .bin suffix prevents Kaggle's automatic archive expansion; read it with Python zipfile.ZipFile.
 This is NOT the old 3.8 GB comfyui_offline.tar requirement.
 
 ## Future Notebook integration
