@@ -1,0 +1,67 @@
+name: Fetch Garden Tales v25 finished video
+on:
+  push:
+    paths:
+      - .github/workflows/fetch-v25-video.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KERNEL_VERSION: sita2ksitas/garden-tales-v25-h3/2
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install established Kaggle CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'kaggle==2.2.4'
+      - name: Download existing output only
+        run: |
+          mkdir -p fetched returned
+          kaggle kernels output "$KERNEL_VERSION" -p fetched -o
+      - name: Extract completed video and verify
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile,json,hashlib,shutil,subprocess
+          root=Path('fetched')
+          for z in list(root.rglob('*_result.zip')):
+              target=z.parent/(z.stem+'_unpacked')
+              target.mkdir(exist_ok=True)
+              with zipfile.ZipFile(z) as archive:
+                  for info in archive.infolist():
+                      name=Path(info.filename)
+                      if name.is_absolute() or '..' in name.parts:
+                          raise RuntimeError('Unsafe archive entry')
+                  archive.extractall(target)
+          reports=[]
+          for p in root.rglob('report.json'):
+              try: d=json.loads(p.read_text())
+              except Exception: continue
+              if d.get('status')=='COMPLETE' and d.get('video_generated') is True:
+                  reports.append((p,d))
+          if not reports: raise RuntimeError('Missing completed report')
+          mp4s=list(root.rglob('*.mp4'))
+          wanted=Path(str(reports[0][1].get('mp4',''))).name
+          if wanted: mp4s=[p for p in mp4s if p.name==wanted]
+          if not mp4s: raise RuntimeError('Missing completed MP4')
+          hashes={hashlib.sha256(p.read_bytes()).hexdigest() for p in mp4s}
+          if len(hashes)!=1: raise RuntimeError('Ambiguous MP4 payloads')
+          p=mp4s[0]
+          target=Path('returned/Garden_Tales_v25_FINI_8s.mp4')
+          shutil.copy2(p,target)
+          receipt={'kernel_version':'sita2ksitas/garden-tales-v25-h3/2','bytes':target.stat().st_size,'sha256':next(iter(hashes)),'report':reports[0][1]}
+          Path('returned/receipt.json').write_text(json.dumps(receipt,indent=2,ensure_ascii=False))
+          print('MP4_RETRIEVED',target.stat().st_size,next(iter(hashes)))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: garden-tales-v25-video
+          path: returned/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
